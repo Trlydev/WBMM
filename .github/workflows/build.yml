@@ -1,9 +1,13 @@
 name: build
 
 # Every push to main publishes a new release, v0.2.<patch>: the patch is one
-# more than the newest v0.2.* tag (the native window began the 0.2 series).
-# Pushing a tag like v1.2.3 publishes that exact version instead. Pull
-# requests only test and build.
+# more than the newest v0.2.* tag. Pushing a tag like v1.2.3 publishes that
+# exact version instead. Pull requests and manual runs only test and build.
+#
+# Speed: one Linux job builds both programs (Windows with MinGW; Windows
+# runners are several times slower), tests run beside it, and both keep a
+# Go build cache, so Fyne's C code (GLFW, OpenGL) is compiled once rather
+# than on every push.
 on:
   push:
     branches: [main]
@@ -19,6 +23,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  WINDOW_HEADERS: libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -29,17 +36,39 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
-      - name: Window toolkit headers (the window uses OpenGL)
-        run: sudo apt-get update -q && sudo apt-get install -y -q libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+          cache: false
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: test-${{ hashFiles('go.sum') }}-
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends $WINDOW_HEADERS
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
-      - run: go vet ./...
+      - run: go vet ./... && GOOS=windows CGO_ENABLED=0 go vet ./internal/steam ./internal/desktop ./internal/game ./internal/manager ./internal/selfupdate
       - run: go test ./...
 
-  version:
+  build:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/go/bin
+          key: release-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: release-${{ hashFiles('go.sum') }}-
       - name: Pick version
         id: ver
         env:
@@ -56,105 +85,38 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building $v"
-
-  # The window (Fyne) needs cgo, so each OS builds its own binary.
-  build-linux:
-    needs: [test, version]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: go.mod
-      - name: Window toolkit headers
-        run: sudo apt-get update -q && sudo apt-get install -y -q libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
-      - name: Build
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          mkdir dist
-          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o dist/wbmm-linux-amd64 ./cmd/wbmm
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: part-linux
-          path: dist/*
-
-  build-windows:
-    needs: [test, version]
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: go.mod
+      - name: Toolchains (window headers, MinGW for Windows)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends $WINDOW_HEADERS gcc-mingw-w64-x86-64
       - name: Windows icon and version info
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          go install github.com/tc-hib/go-winres@v0.3.3 # module checksum verified by sum.golang.org
+          [ -x ~/go/bin/go-winres ] || go install github.com/tc-hib/go-winres@v0.3.3 # module checksum verified by sum.golang.org
           num=$(echo "${VERSION#v}" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/')
           case "$num" in *[!0-9.]*|"") num=0.0.0 ;; esac
-          go-winres simply --arch amd64 --out cmd/wbmm/rsrc \
+          ~/go/bin/go-winres simply --arch amd64 --out cmd/wbmm/rsrc \
             --icon internal/desktop/icons/icon-256.png --manifest gui \
             --product-name "WorldBox Mod Manager" --file-description "WorldBox Mod Manager" \
             --original-filename wbmm.exe --product-version "$num.0" --file-version "$num.0"
       - name: Build
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           mkdir dist
+          flags="-s -w -X main.version=${VERSION}"
+          export CGO_ENABLED=1 GOARCH=amd64
+          GOOS=linux go build -trimpath -ldflags "$flags" -o dist/wbmm-linux-amd64 ./cmd/wbmm & a=$!
           # A GUI program: no console window on double-click.
-          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
-            -o dist/wbmm-windows-amd64.exe ./cmd/wbmm
+          GOOS=windows CC=x86_64-w64-mingw32-gcc go build -trimpath -ldflags "$flags -H windowsgui" -o dist/wbmm-windows-amd64.exe ./cmd/wbmm & b=$!
+          wait $a && wait $b
+          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: part-windows
-          path: dist/*
-
-  build:
-    needs: [version, build-linux, build-windows]
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ needs.version.outputs.version }}
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: part-*
-          merge-multiple: true
-          path: dist
-      - name: Checksums
-        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      # wbmm's self-update only trusts a SHA256SUMS.txt signed with the
-      # release key (the secret is used by this step alone).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        if: github.event_name == 'push'
-        with:
-          persist-credentials: false
-          path: src
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        if: github.event_name == 'push'
-        with:
-          go-version-file: src/go.mod
-          cache: false
-      - name: Sign checksums
-        if: github.event_name == 'push'
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: cd src && go run ./cmd/signrelease ../dist/SHA256SUMS.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: wbmm-${{ needs.version.outputs.version }}
+          name: wbmm-${{ steps.ver.outputs.version }}
           path: dist/*
 
   release:
-    needs: build
+    needs: [test, build]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
@@ -164,6 +126,18 @@ jobs:
         with:
           name: wbmm-${{ needs.build.outputs.version }}
           path: dist
+      # wbmm's self-update only trusts a SHA256SUMS.txt signed with the
+      # release key (Ed25519; the secret is used by this step alone).
+      - name: Sign checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          umask 077
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -rawin -inkey "$key" -in dist/SHA256SUMS.txt | base64 -w0 > dist/SHA256SUMS.txt.sig
+          test -s dist/SHA256SUMS.txt.sig
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.build.outputs.version }}

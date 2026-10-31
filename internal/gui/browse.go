@@ -268,10 +268,6 @@ func (b *browseView) cardFor(c modCard, have bool) fyne.CanvasObject {
 		meta = "by " + c.Author + " · "
 	}
 	meta += ago(c.Updated)
-	metaL := widget.NewLabel(meta)
-	metaL.Truncation = fyne.TextTruncateEllipsis
-	metaL.SizeName = sSmall
-	metaL.Importance = widget.LowImportance
 	var stats string
 	if c.Source == "workshop" {
 		stats = count(c.Subs) + " subscribers"
@@ -281,10 +277,15 @@ func (b *browseView) cardFor(c modCard, have bool) fyne.CanvasObject {
 			stats = c.Category + " · " + stats
 		}
 	}
-	statsL := widget.NewLabel(stats)
-	statsL.Truncation = fyne.TextTruncateEllipsis
-	statsL.SizeName = sSmall
-	statsL.Importance = widget.LowImportance
+	small := func(s string) fyne.CanvasObject {
+		l := widget.NewLabel(s)
+		l.Truncation = fyne.TextTruncateEllipsis
+		l.SizeName = sSmall
+		l.Importance = widget.LowImportance
+		// Labels pad themselves generously; two small lines sit closer.
+		return container.New(layout.NewCustomPaddedLayout(-8, -8, 0, 0), l)
+	}
+	metaL, statsL := small(meta), small(stats)
 
 	open := func() { b.openDetails(c) }
 	var btn *widget.Button

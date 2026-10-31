@@ -167,11 +167,20 @@ func (v *installedView) row(md manager.Mod) fyne.CanvasObject {
 	if md.FileName != "" {
 		meta += " · " + md.FileName
 	}
-	info := container.NewVBox(container.NewHBox(name, ver, container.NewCenter(src)), mutedLabel(meta))
-	if md.Problem != "" {
-		w := label(md.Problem)
+	info := container.NewVBox(container.NewHBox(name, ver, container.NewCenter(src), container.NewCenter(u.safetyBadge(md))), mutedLabel(meta))
+	warn := func(s string) {
+		w := label(s)
 		w.Importance = widget.WarningImportance
 		info.Add(w)
+	}
+	if md.Problem != "" {
+		warn(md.Problem)
+	}
+	if len(md.Needs) > 0 {
+		warn("Needs " + strings.Join(md.Needs, ", ") + ", which isn't installed and switched on. NeoModLoader won't load it without.")
+	}
+	if len(md.Clashes) > 0 {
+		warn("Doesn't work together with " + strings.Join(md.Clashes, ", ") + ". Switch one of them off.")
 	}
 
 	toggle := widget.NewCheck("Load", nil)
@@ -190,6 +199,9 @@ func (v *installedView) row(md manager.Mod) fyne.CanvasObject {
 			u.say("%s is off from the next start.", md.Name)
 		}
 	}
+	if v, current := u.m.Verdict(md.Folder); current && v.Blocked() {
+		toggle.Disable()
+	}
 	if md.UID == "" || md.Problem != "" || u.running {
 		toggle.Disable()
 	}
@@ -205,10 +217,10 @@ func (v *installedView) row(md manager.Mod) fyne.CanvasObject {
 		acts.Add(b)
 	}
 	if md.URL != "" {
-		acts.Add(widget.NewButtonWithIcon("", theme.ComputerIcon(), func() { u.openURL(md.URL) }))
+		acts.Add(widget.NewButtonWithIcon("Page", theme.ComputerIcon(), func() { u.openURL(md.URL) }))
 	}
 	if md.Problem == "" {
-		acts.Add(widget.NewButtonWithIcon("", theme.FolderOpenIcon(), func() {
+		acts.Add(widget.NewButtonWithIcon("Folder", theme.FolderOpenIcon(), func() {
 			if err := openFolder(md.Folder); err != nil {
 				u.fail(err)
 			}

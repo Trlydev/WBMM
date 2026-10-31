@@ -166,3 +166,78 @@ func TestNewerOnLine(t *testing.T) {
 		t.Error("newest of its line reported as outdated")
 	}
 }
+
+// A Workshop mod whose code names a Discord webhook (a harmless sample:
+// nothing runs it) is held: switched off, refused by SetEnabled, and
+// allowed only through Accept. If the game is running when it's found, it
+// is switched off at the next check after the game closes.
+func TestSafetyHold(t *testing.T) {
+	m, gd := fakeGame(t)
+	ws := filepath.Join(gd, "..", "..", "workshop", "content", game.AppID, "3999999999")
+	write(t, filepath.Join(ws, "mod.json"), `{"name":"Sneaky","author":"Bad","version":"1"}`)
+	write(t, filepath.Join(ws, "Code", "A.cs"), `class A { string u = "https://discord.com/api/webhooks/1/x"; }`)
+	md, err := m.Find("BAD_SNEAKY")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gameRunning = func() bool { return true }
+	v, err := m.Check(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Blocked() || v.Held {
+		t.Fatalf("while the game runs: blocked %v, held %v", v.Blocked(), v.Held)
+	}
+	gameRunning = func() bool { return false }
+	defer func() { gameRunning = game.Running }()
+	held, err := m.CheckAll()
+	if err != nil || len(held) != 1 {
+		t.Fatalf("after the game closed: held %v, %v", held, err)
+	}
+	if again, _ := m.CheckAll(); len(again) != 0 {
+		t.Errorf("an already held mod was reported again: %v", again)
+	}
+	if off, _ := nml.Disabled(game.NMLDir(gd)); !off["BAD_SNEAKY"] {
+		t.Error("not switched off in NML's list")
+	}
+	if err := m.SetEnabled("BAD_SNEAKY", true); err == nil {
+		t.Error("a held mod was switched on")
+	}
+	if err := m.Accept(md); err != nil {
+		t.Fatal(err)
+	}
+	if off, _ := nml.Disabled(game.NMLDir(gd)); off["BAD_SNEAKY"] {
+		t.Error("still off after Accept")
+	}
+
+	// A changed mod is checked again; the acceptance was for the old files.
+	write(t, filepath.Join(ws, "Code", "B.cs"), `class B { string u = "https://api.telegram.org/bot1/x"; }`)
+	if held, _ := m.CheckAll(); len(held) != 1 {
+		t.Errorf("changed mod not held again: %v", held)
+	}
+
+	// The everyday mods in the fake game pass.
+	for _, uid := range []string{"TUXXEGO_MODERNBOX", "APEXLITE_OPTIME"} {
+		md, _ := m.Find(uid)
+		if v, ok := m.Verdict(md.Folder); !ok || v.Blocked() {
+			t.Errorf("%s: %+v, %v", uid, v, ok)
+		}
+	}
+}
+
+func TestDependencies(t *testing.T) {
+	m, gd := fakeGame(t)
+	write(t, filepath.Join(gd, "Mods", "Addon", "mod.json"),
+		`{"name":"Addon","author":"Me","Dependencies":["Tuxxego.ModernBox","someone.missing_lib"],"IncompatibleWith":["ApexLite.Optime"]}`)
+	md, err := m.Find("ME_ADDON")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(md.Needs) != 1 || md.Needs[0] != "someone.missing_lib" {
+		t.Errorf("needs: %v", md.Needs)
+	}
+	if len(md.Clashes) != 1 || md.Clashes[0] != "Optime" {
+		t.Errorf("clashes: %v", md.Clashes)
+	}
+}

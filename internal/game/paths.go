@@ -110,6 +110,11 @@ func StreamingAssets(gameDir string) string {
 	return filepath.Join(gameDir, "worldbox_Data", "StreamingAssets")
 }
 
+// ManagedDir holds the game's own .NET libraries.
+func ManagedDir(gameDir string) string {
+	return filepath.Join(filepath.Dir(StreamingAssets(gameDir)), "Managed")
+}
+
 // ModsDir is where NeoModLoader looks for local mods (one folder per mod).
 func ModsDir(gameDir string) string { return filepath.Join(gameDir, "Mods") }
 

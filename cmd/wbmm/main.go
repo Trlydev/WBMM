@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Trlydev/WBMM/internal/archive"
 	"github.com/Trlydev/WBMM/internal/desktop"
 	"github.com/Trlydev/WBMM/internal/gui"
 	"github.com/Trlydev/WBMM/internal/manager"
+	"github.com/Trlydev/WBMM/internal/scan"
 	"github.com/Trlydev/WBMM/internal/selfupdate"
 	"github.com/Trlydev/WBMM/internal/sources"
 	"github.com/Trlydev/WBMM/internal/steam"
@@ -38,6 +41,9 @@ Usage:
   wbmm enable UID | disable UID turn a mod on or off (game closed)
   wbmm updates [-yes]           check GameBanana mods for updates
   wbmm nml [install]            NeoModLoader status, or install/update it
+  wbmm scan PATH [-json]        check a mod folder or archive for malware patterns
+  wbmm check                    check every installed mod; hold risky ones
+  wbmm accept UID|ws:ID         allow a mod the safety check holds
   wbmm self-update              update wbmm to the newest release
   wbmm install-app [no-desktop] install as an app (menu entry, shortcut)
   wbmm uninstall-app            remove the app (mods and settings stay)
@@ -151,6 +157,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 	case "install":
 		file := fs.Int("file", 0, "GameBanana file ID (default: newest)")
 		force := fs.Bool("force", false, "install even if GameBanana's virus scan hasn't passed it")
+		accept := fs.Bool("accept-risk", false, "install even if wbmm's safety check found CRITICAL things")
 		if err := fs.Parse(reorder(args)); err != nil {
 			return err
 		}
@@ -164,11 +171,20 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		if !ok {
 			return fmt.Errorf("%q is not a GameBanana mod ID or link", fs.Arg(0))
 		}
-		names, err := m.InstallGB(id, *file, *force)
+		names, err := m.InstallGB(id, *file, *force, *accept)
 		if err != nil {
 			var nc *manager.NotCleanError
 			if errors.As(err, &nc) {
 				return fmt.Errorf("%w; add -force to install it anyway", err)
+			}
+			var re *manager.RiskError
+			if errors.As(err, &re) {
+				for _, f := range re.Findings {
+					if f.Severity >= scan.High {
+						fmt.Printf("%-8s %-20s %s  %s\n", f.Severity, f.Rule, f.File, f.Detail)
+					}
+				}
+				return fmt.Errorf("%w\nRead the findings above; add -accept-risk to install it anyway", err)
 			}
 			return err
 		}
@@ -193,7 +209,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 			return nil
 		}
 		last := ""
-		err := m.Subscribe(id, func(p steam.Progress) {
+		v, err := m.Subscribe(id, func(p steam.Progress) {
 			line := "waiting for Steam…"
 			if p.Phase == "downloading" && p.Total > 0 {
 				line = fmt.Sprintf("downloading %d%%", p.Done*100/p.Total)
@@ -207,6 +223,41 @@ func run(m *manager.Manager, cmd string, args []string) error {
 			return err
 		}
 		fmt.Println("Subscribed and downloaded.")
+		if v != nil && v.Blocked() {
+			for _, f := range v.Findings {
+				if f.Severity >= scan.High {
+					fmt.Printf("%-8s %-20s %s  %s\n", f.Severity, f.Rule, f.File, f.Detail)
+				}
+			}
+			fmt.Println("The safety check found CRITICAL things above and switched the mod off. Unsubscribe, or run: wbmm accept " + id)
+		}
+
+	case "scan":
+		asJSON := fs.Bool("json", false, "print the report as JSON")
+		if err := fs.Parse(reorder(args)); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return errors.New("usage: wbmm scan PATH [-json]")
+		}
+		rep, err := scanPath(m, fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return json.NewEncoder(os.Stdout).Encode(rep)
+		}
+		if len(rep.Findings) == 0 {
+			fmt.Printf("%d files, %d scripts: nothing found.\n", rep.Files, rep.Scripts)
+			return nil
+		}
+		for _, f := range rep.Findings {
+			loc := f.File
+			if f.Line > 0 {
+				loc = fmt.Sprintf("%s:%d", f.File, f.Line)
+			}
+			fmt.Printf("%-8s %-22s %s  %s\n", f.Severity, f.Rule, loc, f.Detail)
+		}
 
 	case "self-update":
 		rel, err := selfupdate.Latest()
@@ -229,6 +280,39 @@ func run(m *manager.Manager, cmd string, args []string) error {
 
 	case "uninstall-app":
 		return desktop.Uninstall(func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+
+	case "check":
+		held, err := m.CheckAll()
+		mods, _ := m.List()
+		for _, md := range mods {
+			if v, ok := m.Verdict(md.Folder); ok && v.Max >= scan.High {
+				state := "worth a look"
+				if v.Blocked() {
+					state = "HELD (switched off)"
+				} else if v.Accepted {
+					state = "allowed by you"
+				}
+				fmt.Printf("%s: %s, worst finding %s\n", md.Name, state, v.Max)
+			}
+		}
+		fmt.Printf("Checked %d mods; %d newly held.\n", len(mods), len(held))
+		return err
+
+	case "accept":
+		if len(args) != 1 {
+			return errors.New("usage: wbmm accept UID|ws:ID")
+		}
+		mods, err := m.List()
+		if err != nil {
+			return err
+		}
+		ref := strings.TrimPrefix(args[0], "ws:")
+		for _, md := range mods {
+			if md.UID == strings.ToUpper(ref) || md.WorkshopID == ref {
+				return m.Accept(md)
+			}
+		}
+		return fmt.Errorf("no installed mod %q", args[0])
 
 	case "remove", "enable", "disable":
 		if len(args) != 1 {
@@ -260,7 +344,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		for _, u := range ups {
 			fmt.Printf("%s: %s (%s)\n", u.Name, u.File.Name, u.File.AddedTime().Format(time.DateOnly))
 			if *yes {
-				if _, err := m.InstallGB(u.GBID, u.File.ID, false); err != nil {
+				if _, err := m.InstallGB(u.GBID, u.File.ID, false, false); err != nil {
 					fmt.Println("  not updated:", err)
 				} else {
 					fmt.Println("  updated")
@@ -300,6 +384,27 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 	return nil
+}
+
+// scanPath scans a mod folder, or an archive unpacked to a temporary folder.
+func scanPath(m *manager.Manager, p string) (*scan.Report, error) {
+	st, err := os.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	opt := m.ScanOptions()
+	if st.IsDir() {
+		return scan.Mod(p, opt)
+	}
+	tmp, err := os.MkdirTemp("", "wbmm-scan-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := archive.Extract(p, tmp); err != nil {
+		return nil, err
+	}
+	return scan.Mod(tmp, opt)
 }
 
 // reorder puts flags before the mod reference, so "install gb:1 -file 2"

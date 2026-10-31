@@ -29,6 +29,8 @@ type Declare struct {
 	IconPath     string   `json:"iconPath"`
 	RepoURL      string   `json:"RepoUrl"`
 	Dependencies []string `json:"Dependencies"`
+	Optional     []string `json:"OptionalDependencies"`
+	Incompatible []string `json:"IncompatibleWith"`
 	ModType      string   `json:"ModType"`
 }
 
@@ -40,6 +42,12 @@ func (d Declare) UID() string {
 	if id == "" {
 		id = d.Author + "." + d.Name
 	}
+	return Symbol(id)
+}
+
+// Symbol turns a mod ID as written in mod.json (a GUID, "author.name", or a
+// dependency entry) into the UID NML compares.
+func Symbol(id string) string {
 	var b strings.Builder
 	for _, r := range id {
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r <= 256 {

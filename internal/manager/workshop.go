@@ -9,14 +9,29 @@ import (
 	"github.com/Trlydev/WBMM/internal/steam"
 )
 
-// Subscribe subscribes to a Workshop mod through the Steam client and waits
-// until Steam has downloaded it.
-func (m *Manager) Subscribe(id string, progress func(steam.Progress)) error {
+// Subscribe subscribes to a Workshop mod through the Steam client, waits
+// until Steam has downloaded it, and checks it with the malware scanner
+// before the game can load it. The verdict is nil for items that aren't
+// mods (worlds).
+func (m *Manager) Subscribe(id string, progress func(steam.Progress)) (*Verdict, error) {
 	gd, err := m.GameDir()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return steam.Subscribe(gd, id, progress)
+	if err := steam.Subscribe(gd, id, progress); err != nil {
+		return nil, err
+	}
+	mods, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, md := range mods {
+		if md.WorkshopID == id && md.Problem == "" {
+			v, err := m.Check(md)
+			return &v, err
+		}
+	}
+	return nil, nil
 }
 
 // Unsubscribe unsubscribes from a Workshop mod. Steam deletes its files;

@@ -111,7 +111,7 @@ func (m *Manager) AutoUpdate() (updated, held []string, err error) {
 			held = append(held, u.Name+" (virus scan not passed)")
 			continue
 		}
-		if _, ierr := m.InstallGB(u.GBID, u.File.ID, false); ierr != nil {
+		if _, ierr := m.InstallGB(u.GBID, u.File.ID, false, false); ierr != nil {
 			held = append(held, fmt.Sprintf("%s (%v)", u.Name, ierr))
 			continue
 		}

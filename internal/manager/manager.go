@@ -16,6 +16,7 @@ import (
 	"github.com/Trlydev/WBMM/internal/archive"
 	"github.com/Trlydev/WBMM/internal/game"
 	"github.com/Trlydev/WBMM/internal/nml"
+	"github.com/Trlydev/WBMM/internal/scan"
 	"github.com/Trlydev/WBMM/internal/sources"
 )
 
@@ -65,6 +66,12 @@ type Mod struct {
 	HasIcon    bool   `json:"hasIcon"`
 	// Problem explains why NML won't load it as listed.
 	Problem string `json:"problem,omitempty"`
+	// Needs lists required mods (UIDs) that aren't installed and switched
+	// on; Clashes, mods it says it can't run with that are.
+	Needs   []string `json:"needs,omitempty"`
+	Clashes []string `json:"clashes,omitempty"`
+
+	deps, incompatible []string
 }
 
 type Manager struct {
@@ -159,6 +166,7 @@ func (m *Manager) List() ([]Mod, error) {
 			return md, true
 		}
 		md.UID, md.Name, md.Author, md.Version, md.Description = d.UID(), d.Name, d.Author, d.Version, d.Description
+		md.deps, md.incompatible = d.Dependencies, d.Incompatible
 		md.Enabled = !disabled[md.UID]
 		md.URL = d.RepoURL
 		md.Icon = findIcon(filepath.Dir(decl), d.IconPath)
@@ -190,7 +198,35 @@ func (m *Manager) List() ([]Mod, error) {
 		md.URL = "https://steamcommunity.com/sharedfiles/filedetails/?id=" + e
 		out = append(out, md)
 	}
+	checkDependencies(out)
 	return out, nil
+}
+
+// checkDependencies fills in what each switched-on mod needs and clashes
+// with, the way NML resolves them: by UID, among mods that will load.
+func checkDependencies(mods []Mod) {
+	on := map[string]string{} // UID -> name
+	for _, md := range mods {
+		if md.Enabled && md.Problem == "" {
+			on[md.UID] = md.Name
+		}
+	}
+	for i := range mods {
+		md := &mods[i]
+		if !md.Enabled || md.Problem != "" {
+			continue
+		}
+		for _, d := range md.deps {
+			if uid := nml.Symbol(strings.TrimSpace(d)); uid != "" && on[uid] == "" {
+				md.Needs = append(md.Needs, strings.TrimSpace(d))
+			}
+		}
+		for _, d := range md.incompatible {
+			if name := on[nml.Symbol(strings.TrimSpace(d))]; name != "" {
+				md.Clashes = append(md.Clashes, name)
+			}
+		}
+	}
 }
 
 // Find returns the listed mod with uid, preferring the copy NML loads.
@@ -245,10 +281,18 @@ func (m *Manager) InstalledFiles(gbID int) map[int]bool {
 	return out
 }
 
-// SetEnabled turns a mod on or off for the game's next start.
+// SetEnabled turns a mod on or off for the game's next start. A mod the
+// safety check holds is only switched on through Accept.
 func (m *Manager) SetEnabled(uid string, enabled bool) error {
 	if gameRunning() {
 		return ErrGameRunning
+	}
+	if enabled {
+		if md, err := m.Find(uid); err == nil {
+			if v, current := m.Verdict(md.Folder); current && v.Blocked() {
+				return fmt.Errorf("the safety check is holding %s: review it first", md.Name)
+			}
+		}
 	}
 	gd, err := m.GameDir()
 	if err != nil {
@@ -299,11 +343,13 @@ func PickFile(files []sources.GBFile, fileID int) (sources.GBFile, error) {
 	return sources.GBFile{}, fmt.Errorf("file %d is not part of this mod", fileID)
 }
 
-// InstallGB downloads a GameBanana mod file (the newest when fileID is 0)
-// and puts each mod inside it into the Mods folder, replacing an older copy
-// of the same mod. force installs a file GameBanana's scan hasn't passed.
-// It returns the names of the installed mods.
-func (m *Manager) InstallGB(gbID, fileID int, force bool) ([]string, error) {
+// InstallGB downloads a GameBanana mod file (the newest when fileID is 0),
+// checks it with the malware scanner, and puts each mod inside it into the
+// Mods folder, replacing an older copy of the same mod. force installs a
+// file GameBanana's virus scan hasn't passed; acceptRisk one wbmm's scanner
+// found CRITICAL things in (a *RiskError otherwise). It returns the names
+// of the installed mods.
+func (m *Manager) InstallGB(gbID, fileID int, force, acceptRisk bool) ([]string, error) {
 	gd, err := m.GameDir()
 	if err != nil {
 		return nil, err
@@ -350,6 +396,10 @@ func (m *Manager) InstallGB(gbID, fileID int, force bool) ([]string, error) {
 	if len(roots) == 0 {
 		return nil, noModError(unpacked, f.Name)
 	}
+	verdict := m.scanStaged(unpacked)
+	if verdict.Blocked() && !acceptRisk {
+		return nil, &RiskError{Name: mod.Name, Findings: verdict.Findings}
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -365,9 +415,13 @@ func (m *Manager) InstallGB(gbID, fileID int, force bool) ([]string, error) {
 		}
 		uid := d.UID()
 		folder := m.folderFor(modsDir, uid)
-		if err := replaceDir(root, filepath.Join(modsDir, folder)); err != nil {
+		dst := filepath.Join(modsDir, folder)
+		if err := replaceDir(root, dst); err != nil {
 			return names, err
 		}
+		v := verdict
+		v.Fingerprint, v.Accepted = fingerprint(dst), verdict.Blocked()
+		m.st.Verdicts[dst] = v
 		m.st.Records[uid] = Record{
 			UID: uid, Folder: folder, Name: d.Name, GBID: gbID,
 			FileID: f.ID, FileName: f.Name, FileAdded: f.Added, SHA256: sum,
@@ -448,6 +502,16 @@ func noModError(dir, name string) error {
 		return fmt.Errorf("%s has no mod.json: it's for another loader (BepInEx or NCMS). Follow the instructions on its page", name)
 	}
 	return fmt.Errorf("%s has no mod.json, so NeoModLoader can't load it", name)
+}
+
+// ScanOptions tells the scanner where the game's own libraries are, so a
+// mod's copy of one is recognised.
+func (m *Manager) ScanOptions() scan.Options {
+	gd, err := m.GameDir()
+	if err != nil {
+		return scan.Options{}
+	}
+	return scan.Options{GameManaged: game.ManagedDir(gd)}
 }
 
 // LoaderStatus reports the NeoModLoader install.

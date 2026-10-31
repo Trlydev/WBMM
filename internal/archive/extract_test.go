@@ -2,6 +2,7 @@ package archive
 
 import (
 	"archive/zip"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,5 +78,28 @@ func TestRejectsWindowsUnsafeNames(t *testing.T) {
 		if err := Extract(src, t.TempDir()); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
+	}
+}
+
+// Zips made by some Windows tools use backslashes, folder entries too.
+func TestZipBackslashPaths(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	zw.Create(`Mod\Resources\`)
+	w, _ := zw.Create(`Mod\Resources\a.txt`)
+	w.Write([]byte("hi"))
+	w, _ = zw.Create(`Mod\mod.json`)
+	w.Write([]byte("{}"))
+	zw.Close()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.zip")
+	os.WriteFile(src, buf.Bytes(), 0o644)
+	dest := filepath.Join(dir, "out")
+	os.Mkdir(dest, 0o755)
+	if err := Extract(src, dest); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "Mod", "Resources", "a.txt")); err != nil || string(b) != "hi" {
+		t.Errorf("a.txt: %q, %v", b, err)
 	}
 }

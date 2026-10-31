@@ -4,6 +4,7 @@
 package gui
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"log"
@@ -17,7 +18,9 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/Trlydev/WBMM/internal/desktop"
@@ -143,10 +146,12 @@ func (u *ui) header() fyne.CanvasObject {
 	u.runChip = badge("WorldBox is running", p.sand)
 	u.runChip.Hide()
 	chips := container.NewHBox(u.runChip, u.nmlChip)
+	play := widget.NewButtonWithIcon("Play WorldBox", theme.MediaPlayIcon(), u.play)
+	play.Importance = widget.HighImportance
 
 	row := container.NewBorder(nil, nil,
 		container.NewHBox(brand, widget.NewSeparator(), tabs, u.countTxt),
-		container.NewVBox(layout.NewSpacer(), chips, layout.NewSpacer()))
+		container.NewHBox(container.NewVBox(layout.NewSpacer(), chips, layout.NewSpacer()), play))
 	return container.NewStack(grad, container.New(layout.NewCustomPaddedLayout(10, 10, 16, 16), row))
 }
 
@@ -293,6 +298,44 @@ func (u *ui) paintBanners() {
 	u.banners.Refresh()
 }
 
+// play starts WorldBox through Steam, after a look at what would stop
+// mods loading.
+func (u *ui) play() {
+	if u.running {
+		u.say("WorldBox is already running.")
+		return
+	}
+	start := func() {
+		u.openURL("steam://rungameid/" + game.AppID)
+		u.say("Starting WorldBox through Steam…")
+	}
+	if u.loader != nil && !u.loader.Installed {
+		d := dialog.NewConfirm("NeoModLoader isn't installed", "Without it no mods load. Install it first?", func(install bool) {
+			if install {
+				u.installLoader()
+				return
+			}
+			start()
+		}, u.w)
+		d.SetConfirmText("Install NeoModLoader")
+		d.SetDismissText("Play without mods")
+		d.Show()
+		return
+	}
+	held := 0
+	for _, md := range u.inst.mods {
+		if v, current := u.m.Verdict(md.Folder); current && v.Blocked() {
+			held++
+		}
+	}
+	if held > 0 {
+		u.say("Starting WorldBox. %d mod(s) stay off until you review them under Installed.", held)
+		u.openURL("steam://rungameid/" + game.AppID)
+		return
+	}
+	start()
+}
+
 func (u *ui) installLoader() {
 	u.say("Installing NeoModLoader…")
 	go func() {
@@ -348,10 +391,26 @@ func (u *ui) background() {
 	u.refreshStatus(true)
 	fyne.Do(func() { u.inst.reload() })
 	time.Sleep(3 * time.Second)
-	var lastApp, lastMods time.Time
+	var lastApp, lastMods, lastCheck time.Time
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
 	for {
+		// The safety check: cheap when nothing changed (file sizes and
+		// times are compared first), so every minute catches Steam's
+		// silent Workshop updates before the next game start.
+		if time.Since(lastCheck) > time.Minute {
+			lastCheck = time.Now()
+			held, err := u.m.CheckAll()
+			fyne.Do(func() {
+				if len(held) > 0 {
+					u.fail(errors.New(heldMessage(held)))
+				}
+				u.inst.paint()
+			})
+			if err != nil {
+				log.Printf("safety check: %v", err)
+			}
+		}
 		cfg := u.m.Config()
 		if !cfg.NoAppUpdates && time.Since(lastApp) > 6*time.Hour {
 			lastApp = time.Now()

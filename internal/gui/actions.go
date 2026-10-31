@@ -93,8 +93,12 @@ func (u *ui) installGBNewest(c modCard) {
 	}()
 }
 
-// installGB downloads and installs one GameBanana file.
+// installGB downloads, checks and installs one GameBanana file.
 func (u *ui) installGB(id int, f sources.GBFile, name string, force bool) {
+	u.installGBWith(id, f, name, force, false)
+}
+
+func (u *ui) installGBWith(id int, f sources.GBFile, name string, force, acceptRisk bool) {
 	key := u.opKey("gamebanana", strconv.Itoa(id))
 	if _, busy := u.ops[key]; busy {
 		return
@@ -103,7 +107,7 @@ func (u *ui) installGB(id int, f sources.GBFile, name string, force bool) {
 		msg := fmt.Sprintf("GameBanana's virus scan hasn't passed %s.\n\nInstall it anyway? Only do this if you trust the author.", f.Name)
 		d := dialog.NewConfirm("Virus scan not passed", msg, func(ok bool) {
 			if ok {
-				u.installGB(id, f, name, true)
+				u.installGBWith(id, f, name, true, acceptRisk)
 			}
 		}, u.w)
 		d.SetConfirmText("Install anyway")
@@ -111,11 +115,17 @@ func (u *ui) installGB(id int, f sources.GBFile, name string, force bool) {
 		return
 	}
 	u.setOp(key, "Installing…")
-	u.say("Downloading %s (%s)…", name, size(f.Size))
+	u.say("Downloading and checking %s (%s)…", name, size(f.Size))
 	go func() {
-		names, err := u.m.InstallGB(id, f.ID, force)
+		names, err := u.m.InstallGB(id, f.ID, force, acceptRisk)
 		fyne.Do(func() {
 			u.endOp(key)
+			var re *manager.RiskError
+			if errors.As(err, &re) {
+				u.say("The safety check stopped %s.", name)
+				u.riskDialog(name, re, func() { u.installGBWith(id, f, name, force, true) })
+				return
+			}
 			if err != nil {
 				u.fail(fmt.Errorf("%s: %w", name, err))
 				return
@@ -136,7 +146,7 @@ func (u *ui) subscribe(id, name string) {
 	u.setOp(key, "Asking Steam…")
 	u.say("Subscribing to %s through Steam…", name)
 	go func() {
-		err := u.m.Subscribe(id, func(p steam.Progress) {
+		verdict, err := u.m.Subscribe(id, func(p steam.Progress) {
 			fyne.Do(func() {
 				switch {
 				case p.Phase == "downloading" && p.Total > 0:
@@ -160,7 +170,11 @@ func (u *ui) subscribe(id, name string) {
 				u.fail(fmt.Errorf("%s: %w", name, err))
 				return
 			}
-			u.say("Subscribed to %s. Steam downloaded it; it loads the next time WorldBox starts.", name)
+			if verdict != nil && verdict.Blocked() {
+				u.fail(fmt.Errorf("the safety check switched %s off: its code does things malware does. Review it under Installed", name))
+				return
+			}
+			u.say("Subscribed to %s. Steam downloaded it and the safety check passed it; it loads the next time WorldBox starts.", name)
 		})
 	}()
 }

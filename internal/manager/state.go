@@ -33,6 +33,8 @@ type Record struct {
 type state struct {
 	Config  Config            `json:"config"`
 	Records map[string]Record `json:"records"` // by UID
+	// Verdicts of the malware scanner, by mod folder.
+	Verdicts map[string]Verdict `json:"verdicts,omitempty"`
 }
 
 // ConfigDir is wbmm's own folder (settings, state, log).
@@ -46,7 +48,7 @@ func ConfigDir() (string, error) {
 }
 
 func loadState() (*state, error) {
-	s := &state{Records: map[string]Record{}}
+	s := &state{Records: map[string]Record{}, Verdicts: map[string]Verdict{}}
 	d, err := ConfigDir()
 	if err != nil {
 		return s, err
@@ -63,6 +65,9 @@ func loadState() (*state, error) {
 	}
 	if s.Records == nil {
 		s.Records = map[string]Record{}
+	}
+	if s.Verdicts == nil {
+		s.Verdicts = map[string]Verdict{}
 	}
 	return s, nil
 }

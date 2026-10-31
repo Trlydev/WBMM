@@ -1,0 +1,214 @@
+package scan
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+)
+
+// Markers of the 2026 FPS++ worms (see docs/fpsplusplus-analysis.md). They
+// are checked in string literals, in what base64 literals decode to (the
+// worm hid them there), and in the bytes of bundled DLLs.
+
+type marker struct {
+	s, rule, detail string
+}
+
+var wormMarkers = []marker{
+	{"m_persistentcalls", "json-gadget", "a UnityEvent call list (the worm used one to call File.WriteAllBytes and its entry point)"},
+	{"m_targetassemblytypename", "json-gadget", "a UnityEvent call target (the worm used one to call any method)"},
+	{"binaryformatter", "deserialization", "BinaryFormatter (the worm deserialized its code loader with it)"},
+	{"delegateserializationholder", "deserialization", "serialized delegates (the worm's way to get Assembly.Load without naming it)"},
+	{"system.runtime.serialization.formatters", "deserialization", "a .NET object formatter"},
+	{"bootstrapcontext", "deserialization", "ClaimsIdentity's bootstrap context (a deserialization trick the worm used)"},
+	{"losformatter", "deserialization", "a .NET object formatter"},
+	{"objectstateformatter", "deserialization", "a .NET object formatter"},
+	{"netdatacontractserializer", "deserialization", "a .NET object formatter"},
+	{"system.reflection.assembly", "code-loader", "the Assembly type, by name (to load code through reflection)"},
+	{"assembly.load", "code-loader", "Assembly.Load, by name"},
+	{"_data\\managed", "game-path-tamper", "the game's own code folder (the worm wrote its DLL there)"},
+	{"_data/managed", "game-path-tamper", "the game's own code folder (the worm wrote its DLL there)"},
+	{"compiledmodassemblies", "game-path-tamper", "the game's compiled-mods folder (the worm deleted and infected it)"},
+	{"compiledmods", "game-path-tamper", "the game's compiled-mods folder (the worm deleted and infected it)"},
+	{"rejectshadycode", "disables-protection", "the game's \"reject shady code\" protection (the worm turned it off)"},
+}
+
+// checkMarkers reports worm markers found in lowercased text.
+func checkMarkers(hit func(string, Severity, int, string), line int, low, where string) {
+	for _, m := range wormMarkers {
+		if strings.Contains(low, m.s) {
+			hit(m.rule, Critical, line, fmt.Sprintf("%s names %s", where, m.detail))
+		}
+	}
+}
+
+var (
+	reB64Lit = regexp.MustCompile(`^[A-Za-z0-9+/]{12,}={0,2}$`)
+	reHexLit = regexp.MustCompile(`^(?:[0-9a-fA-F]{2}){8,}$`)
+)
+
+// checkEncoded decodes base64 and hex literals, one by one and all of them
+// joined in order (the worm split its blobs into hundreds of variables),
+// and looks for a hidden executable, serialized .NET objects, worm markers,
+// web addresses, shells and code-loading names.
+func checkEncoded(hit func(string, Severity, int, string), lits []strLit) {
+	var all, allHex strings.Builder
+	first, firstHex := 0, 0
+	for _, s := range lits {
+		t := strings.TrimSpace(s.text)
+		if reHexLit.MatchString(t) {
+			if firstHex == 0 {
+				firstHex = s.line
+			}
+			if allHex.Len() < 64<<20 {
+				allHex.WriteString(t)
+			}
+			b, _ := hex.DecodeString(t)
+			inspectDecoded(hit, s.line, "hex", b)
+			continue // hex digits are base64 digits too: not decoded twice
+		}
+		if !reB64Lit.MatchString(t) {
+			continue
+		}
+		if first == 0 {
+			first = s.line
+		}
+		if all.Len() < 64<<20 {
+			all.WriteString(strings.TrimRight(t, "="))
+		}
+		inspectDecoded(hit, s.line, "base64", lenientB64(t))
+	}
+	if all.Len() > 0 {
+		inspectDecoded(hit, first, "base64", lenientB64(all.String()))
+	}
+	if allHex.Len() > 0 {
+		b, _ := hex.DecodeString(allHex.String())
+		inspectDecoded(hit, firstHex, "hex", b)
+	}
+}
+
+func inspectDecoded(hit func(string, Severity, int, string), line int, how string, b []byte) {
+	switch {
+	case len(b) >= 2 && b[0] == 'M' && b[1] == 'Z':
+		hit("embedded-executable", Critical, line, how+" text that decodes to a Windows program or DLL (how the worm carried its payload)")
+	case bytes.HasPrefix(b, []byte{0, 1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff}):
+		hit("deserialization", Critical, line, how+" text that decodes to serialized .NET objects (BinaryFormatter data)")
+	}
+	if len(b) == 0 {
+		return
+	}
+	text := string(bytes.ReplaceAll(b, []byte{0}, nil))
+	low := strings.ToLower(text)
+	checkMarkers(hit, line, low, "encoded text")
+	if !utf8.ValidString(text) {
+		return
+	}
+	switch {
+	case reShellStr.MatchString(text):
+		hit("encoded-string", Critical, line, fmt.Sprintf("hides a shell or download tool in %s text: %q", how, clip(text)))
+	case strings.Contains(low, "http://") || strings.Contains(low, "https://"):
+		hit("encoded-string", High, line, fmt.Sprintf("hides a web address in %s text: %q", how, clip(text)))
+	default:
+		for _, w := range sensitiveSubstr {
+			if strings.Contains(low, w.s) {
+				hit("encoded-string", w.sev, line, fmt.Sprintf("hides %q in %s text", clip(text), how))
+				break
+			}
+		}
+	}
+}
+
+// lenientB64 decodes as much base64 as it can: whole 4-character groups,
+// stopping at the first invalid one.
+func lenientB64(s string) []byte {
+	s = strings.TrimRight(s, "=")
+	s = s[:len(s)/4*4]
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return b
+	}
+	var out []byte
+	for i := 0; i+4 <= len(s); i += 4 {
+		b, err := base64.StdEncoding.DecodeString(s[i : i+4])
+		if err != nil {
+			break
+		}
+		out = append(out, b...)
+	}
+	return out
+}
+
+// dllMarkers are names a compiled worm references: spreading through the
+// Workshop, disabling the game's protection, deserialization tricks, theft.
+var dllMarkers = []string{"NewCommunityFile", "WhereUserPublished", "RejectShadyCode", "DelegateSerializationHolder",
+	"BinaryFormatter", "m_PersistentCalls", "m_TargetAssemblyTypeName", "api.ipify.org", "STEAM_CONFIG",
+	"FPSPlusPlus"}
+
+// WormDLL reports the worm markers a compiled mod references ("" if none).
+// For mods only: the game's own code and loaders legitimately define these
+// APIs (see WormOnlyDLL).
+func WormDLL(path string) string {
+	r := &Report{}
+	inspectDLL(r, "", path)
+	if len(r.Findings) == 0 {
+		return ""
+	}
+	return r.Findings[0].Detail
+}
+
+// wormOnlyMarkers appear only in the worm itself, never in the game, .NET,
+// Unity, Steamworks, BepInEx or RE_PPG: safe to look for in game folders.
+var wormOnlyMarkers = []string{"FPSPlusPlus", "api.ipify.org", "STEAM_CONFIG", "PPG Mod Compiler Protection", "myprivatedata.txt"}
+
+// WormOnlyDLL reports worm-only strings in a file from the game's or a
+// loader's folders ("" if none).
+func WormOnlyDLL(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) > 256<<20 {
+		return ""
+	}
+	var found []string
+	for _, m := range wormOnlyMarkers {
+		if bytes.Contains(b, []byte(m)) || bytes.Contains(b, utf16le(m)) {
+			found = append(found, m)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return "contains strings only the FPS++ worm has: " + strings.Join(found, ", ")
+}
+
+func utf16le(s string) []byte {
+	b := make([]byte, 0, len(s)*2)
+	for i := 0; i < len(s); i++ {
+		b = append(b, s[i], 0)
+	}
+	return b
+}
+
+// inspectDLL looks inside a bundled DLL for worm markers (type, member and
+// string names are stored as UTF-8 and UTF-16 text).
+func inspectDLL(r *Report, rel, path string) {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) > 64<<20 {
+		return
+	}
+	var found []string
+	for _, m := range dllMarkers {
+		utf16 := make([]byte, 0, len(m)*2)
+		for i := 0; i < len(m); i++ {
+			utf16 = append(utf16, m[i], 0)
+		}
+		if bytes.Contains(b, []byte(m)) || bytes.Contains(b, utf16) {
+			found = append(found, m)
+		}
+	}
+	if len(found) > 0 {
+		r.add(Critical, "worm-dll", rel, 0, "compiled code that references what the FPS++ worms used: "+strings.Join(found, ", "))
+	}
+}

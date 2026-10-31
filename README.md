@@ -8,9 +8,9 @@ loader WorldBox mods need.
 
 Not affiliated with Maxim Karpenko, Valve, GameBanana or the NeoModLoader team.
 
-> **Mods are code that runs on your PC.** wbmm checks GameBanana's virus scan
-> before installing, but no scan catches everything. Install mods from authors
-> you trust.
+> **Mods are code that runs on your PC.** wbmm checks every mod with its own
+> safety check (below) and GameBanana's virus scan, but no scan catches
+> everything. Install mods from authors you trust.
 
 ## Install
 
@@ -43,14 +43,48 @@ brings up the open window.
     must be running) and shows the download as it happens. Steam keeps the mod
     updated and removes it when you unsubscribe.
 - **Installed:** every mod NeoModLoader will load, from the Mods folder and
-  the Workshop. Switch mods on and off, update, open their folder or page,
-  remove or unsubscribe.
+  the Workshop, with its safety check result and warnings for missing
+  requirements or mods it can't run with. Switch mods on and off, update,
+  open their folder or page, remove or unsubscribe.
+- **Play WorldBox** starts the game through Steam, after checking that
+  NeoModLoader is there.
 - **Setup:** install or update NeoModLoader, the game folder, automatic
   updates, and the app install.
 
 The first time, turn on **Experimental Mode** in WorldBox's settings, or mods
 won't load. Switch mods on and off with WorldBox closed: NeoModLoader keeps its
 mod list in memory while the game runs.
+
+## Safety check
+
+NeoModLoader compiles a mod's C# with the whole .NET framework available, or
+loads its DLLs as they are, and runs them inside the game with no sandbox. So
+wbmm checks every mod's code before it can run:
+
+- **GameBanana mods** before they reach the Mods folder.
+- **Workshop mods** right after Steam downloads them. A risky one is switched
+  off in NeoModLoader's list before the game can load it.
+- **Every installed mod** again whenever its files change (once a minute),
+  which catches Steam's silent Workshop updates: the 2026 People Playground
+  and PlateUp! worms spread through updates of existing mods.
+
+The scanner (`internal/scan`, built on SWG's) reads only the code
+NeoModLoader would actually load, following its rules: `.cs` files outside
+`bin/`, `obj/` and the art folders, a precompiled mod's top-level DLLs,
+`Assemblies/`. Ordinary modding (Harmony, reflection, config files, even
+network calls) is at most "worth a look". **Serious** findings are what malware
+needs and mods don't: reading browser passwords, Discord tokens or Steam
+sessions; Discord webhooks and Telegram bots; autostart entries; hidden
+programs; encoded PowerShell; downloading and running code in the same place;
+Workshop uploads and Steam chat messages (how mod worms spread); writing into
+other mods or NeoModLoader. A serious finding holds the mod until you review
+it and allow that version.
+
+It was calibrated on ~240 real WorldBox mods from GameBanana and GitHub: only
+NeoModLoader itself and one mod's self-updater (it runs a hidden PowerShell
+script to replace itself with whatever its author's server sends) come out
+serious. The tests use harmless samples that only name what malware does.
+`wbmm scan PATH`, `wbmm check` and `wbmm accept` do it from a terminal.
 
 ## Updates
 
@@ -95,6 +129,8 @@ wbmm subscribe ws:3139755386   # through Steam; unsubscribe likewise
 wbmm disable TUXXEGO_MODERNBOX # enable / disable / remove take the ID from list
 wbmm updates [-yes]
 wbmm nml [install]
+wbmm scan ./SomeMod.zip        # safety check a folder or archive
+wbmm check                     # check every installed mod; hold risky ones
 wbmm self-update
 ```
 
@@ -109,8 +145,9 @@ WBMM_LIVE=1 go test ./internal/nml                    # downloads the real NeoMo
 WBMM_SHOTS=/tmp/shots go test -run Screenshots ./internal/gui   # renders each screen
 ```
 
-Every push to `main` publishes a release, `v0.2.<n>`, built by GitHub Actions
-for Windows and Linux, with signed checksums.
+Every push to `main` publishes a release, `v0.2.<n>`: one Linux job builds
+both programs (Windows with MinGW) with a cached build, beside the tests, in
+about a minute; checksums are signed with the release key.
 
 ## License
 

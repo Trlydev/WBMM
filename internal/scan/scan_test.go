@@ -1,0 +1,144 @@
+package scan
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+const benign = `using UnityEngine;
+// Process.Start in a comment is fine
+public class Mod {
+    public static void Main() {
+        ModAPI.Register(new Modification() {
+            OriginalItem = ModAPI.FindSpawnable("Brick"),
+            NameOverride = "Unsafe Brick",
+            DescriptionOverride = "Totally unsafe. Uses File menu.",
+            AfterSpawn = (Instance) => { Instance.GetComponent<SpriteRenderer>().color = Color.red; }
+        });
+    }
+}`
+
+func has(r *Report, rule string) bool {
+	for _, f := range r.Findings {
+		if f.Rule == rule {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBenignModIsClean(t *testing.T) {
+	r := Source("mod.cs", benign)
+	if r.Max() >= Medium {
+		t.Fatalf("benign mod flagged: %+v", r.Findings)
+	}
+}
+
+func TestDetections(t *testing.T) {
+	cases := map[string]string{
+		"process-spawn":             `System.Diagnostics.Process.Start("cmd.exe");`,
+		"network":                   `var c = new System.Net.WebClient(); c.DownloadString(u);`,
+		"steam-ugc":                 `var h = SteamUGC.StartItemUpdate(app, id); SteamUGC.SetItemContent(h, dir);`,
+		"steam-friends":             `SteamFriends.ReplyToFriendMessage(f, msg);`,
+		"file-delete":               `Directory.Delete(path, true);`,
+		"native-interop":            `[DllImport("kernel32")] static extern IntPtr LoadLibrary(string s);`,
+		"self-replication":          `foreach (var f in Directory.GetDirectories(root)) File.WriteAllText(Path.Combine(f, "script.cs"), payload);`,
+		"game-path-tamper":          `foreach (var d in Directory.GetDirectories(root)) File.Copy(me, Path.Combine(root, "workshop/content/1118200", d));`,
+		"writes-scripts":            `File.WriteAllText(Path.Combine(dir, "script.cs"), text);`,
+		"game-path-write":           `File.Copy(me, Path.Combine(root, "workshop/content/1118200"));`,
+		"mass-delete":               `foreach (var f in Directory.GetFiles(p)) File.Delete(f);`,
+		"reflection-sensitive-type": `var t = Type.GetType("Process"); t.GetMethod("Start").Invoke(null, null);`,
+		"encoded-blob":              `var p = "` + longB64() + `";`,
+	}
+	for rule, src := range cases {
+		if r := Source("x.cs", src); !has(r, rule) {
+			t.Errorf("%s not detected; got %+v", rule, r.Findings)
+		}
+	}
+}
+
+func TestUnicodeEscapeObfuscation(t *testing.T) {
+	r := Source("x.cs", "System.Diagnostics.\\"+"u0050rocess.Start(\"x\");")
+	if !has(r, "process-spawn") || !has(r, "unicode-escapes") {
+		t.Fatalf("escaped identifier not caught: %+v", r.Findings)
+	}
+}
+
+func TestStringContentsDoNotTripKeywordRules(t *testing.T) {
+	r := Source("x.cs", `var s = "Process.Start and System.Net are just words here";`)
+	if has(r, "process-spawn") || has(r, "network") {
+		t.Fatalf("string literal tripped keyword rule: %+v", r.Findings)
+	}
+}
+
+func TestDirFlagsBinariesAndManifestEscape(t *testing.T) {
+	d := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(d, "mod.json"), []byte(`{"Name":"x","Scripts":["../../evil.cs","script.cs"]}`), 0o644))
+	must(t, os.WriteFile(filepath.Join(d, "script.cs"), []byte(benign), 0o644))
+	must(t, os.WriteFile(filepath.Join(d, "helper.dll"), []byte("MZ\x90\x00"), 0o644))
+	must(t, os.WriteFile(filepath.Join(d, "icon.png"), []byte("MZ\x90\x00"), 0o644))
+	r, err := Dir(d)
+	must(t, err)
+	for _, rule := range []string{"manifest-path-escape", "executable-file", "disguised-binary"} {
+		if !has(r, rule) {
+			t.Errorf("%s not reported: %+v", rule, r.Findings)
+		}
+	}
+}
+
+func longB64() string {
+	b := make([]byte, 200)
+	for i := range b {
+		b[i] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i%64]
+	}
+	return string(b)
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKnownLibrary(t *testing.T) {
+	if len(knownLibsJSON) == 0 {
+		t.Fatal("knownlibs.json not embedded")
+	}
+	dir := t.TempDir()
+	// Not a known build: stays CRITICAL.
+	os.WriteFile(filepath.Join(dir, "Mono.Cecil.dll"), []byte("MZ fake"), 0o644)
+	r, err := Dir(dir)
+	if err != nil || !has(r, "executable-file") {
+		t.Fatalf("unknown dll: %+v %v", r.Findings, err)
+	}
+	sum := sha256.Sum256([]byte("MZ fake"))
+	knownLibs[hex.EncodeToString(sum[:])] = knownLib{Name: "Mono.Cecil", Version: "0.10.4"}
+	defer delete(knownLibs, hex.EncodeToString(sum[:]))
+	r, _ = Dir(dir)
+	if has(r, "executable-file") || !has(r, "known-library") || r.Max() != High {
+		t.Fatalf("known dll: %+v", r.Findings)
+	}
+}
+
+func TestGameLibraryCopy(t *testing.T) {
+	game, mod := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(game, "UnityEngine.UI.dll"), []byte("MZ unity ui"), 0o644)
+	os.WriteFile(filepath.Join(mod, "UnityEngine.UI.dll"), []byte("MZ unity ui"), 0o644)
+	os.WriteFile(filepath.Join(mod, "UnityEngine.dll"), []byte("MZ tampered"), 0o644)
+	r, err := DirWith(mod, Options{GameManaged: game})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has(r, "game-library") || !has(r, "executable-file") || r.Max() != Critical {
+		t.Fatalf("got %+v", r.Findings)
+	}
+	for _, f := range r.Findings {
+		if f.Rule == "executable-file" && f.File != "UnityEngine.dll" {
+			t.Fatalf("identical copy flagged: %+v", f)
+		}
+	}
+}

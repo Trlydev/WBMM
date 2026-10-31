@@ -133,7 +133,9 @@ func extractZip(src, dest string) error {
 		if mode&os.ModeSymlink != 0 {
 			return fmt.Errorf("archive entry %q is a symlink", f.Name)
 		}
-		if f.FileInfo().IsDir() {
+		// Some Windows tools write zip paths with backslashes, folders
+		// included ("Mod\\Resources\\").
+		if f.FileInfo().IsDir() || strings.HasSuffix(f.Name, "\\") {
 			if err := os.MkdirAll(p, 0o755); err != nil {
 				return err
 			}

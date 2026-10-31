@@ -142,3 +142,29 @@ func Download(u, path string, maxBytes int64) (sha256hex string, err error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// imageHosts are the only hosts mod images are fetched from.
+var imageHosts = map[string]bool{
+	"images.gamebanana.com":             true,
+	"images.steamusercontent.com":       true,
+	"steamuserimages-a.akamaihd.net":    true,
+	"shared.akamai.steamstatic.com":     true,
+	"shared.fastly.steamstatic.com":     true,
+	"cdn.akamai.steamstatic.com":        true,
+	"shared.cloudflare.steamstatic.com": true,
+}
+
+// GetImage downloads a mod preview image (at most 15 MB) from a known
+// image host.
+func GetImage(u string) ([]byte, error) {
+	p, err := url.Parse(u)
+	if err != nil || p.Scheme != "https" || !imageHosts[strings.ToLower(p.Hostname())] {
+		return nil, fmt.Errorf("not a known image host: %s", u)
+	}
+	resp, err := get(u)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(io.LimitReader(resp.Body, 15<<20))
+}

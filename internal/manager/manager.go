@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +123,14 @@ func (m *Manager) Config() Config {
 	return m.st.Config
 }
 
+// SetUpdates saves the automatic update settings.
+func (m *Manager) SetUpdates(mods, app bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.st.Config.NoModUpdates, m.st.Config.NoAppUpdates = !mods, !app
+	return m.st.save()
+}
+
 // List returns every mod NML will find: local mods first (NML loads them
 // first), then subscribed Workshop mods.
 func (m *Manager) List() ([]Mod, error) {
@@ -220,6 +227,20 @@ func (m *Manager) InstalledGB() map[int]bool {
 	out := map[int]bool{}
 	for _, r := range m.st.Records {
 		out[r.GBID] = true
+	}
+	return out
+}
+
+// InstalledFiles returns the GameBanana file IDs of a mod that are
+// installed (one per mod inside it).
+func (m *Manager) InstalledFiles(gbID int) map[int]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[int]bool{}
+	for _, r := range m.st.Records {
+		if r.GBID == gbID {
+			out[r.FileID] = true
+		}
 	}
 	return out
 }
@@ -427,47 +448,6 @@ func noModError(dir, name string) error {
 		return fmt.Errorf("%s has no mod.json: it's for another loader (BepInEx or NCMS). Follow the instructions on its page", name)
 	}
 	return fmt.Errorf("%s has no mod.json, so NeoModLoader can't load it", name)
-}
-
-// Update is a newer GameBanana file for an installed mod.
-type Update struct {
-	UID  string         `json:"uid"`
-	Name string         `json:"name"`
-	GBID int            `json:"gbId"`
-	File sources.GBFile `json:"file"`
-}
-
-// Updates checks GameBanana for files newer than the installed ones.
-func (m *Manager) Updates() ([]Update, error) {
-	m.mu.Lock()
-	recs := make([]Record, 0, len(m.st.Records))
-	for _, r := range m.st.Records {
-		recs = append(recs, r)
-	}
-	m.mu.Unlock()
-	var out []Update
-	var errs []string
-	checked := map[int][]sources.GBFile{}
-	for _, r := range recs {
-		files, ok := checked[r.GBID]
-		if !ok {
-			var err error
-			files, err = sources.GBFiles(r.GBID)
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", r.Name, err))
-				continue
-			}
-			checked[r.GBID] = files
-		}
-		if len(files) > 0 && files[0].ID != r.FileID && files[0].Added > r.FileAdded {
-			out = append(out, Update{UID: r.UID, Name: r.Name, GBID: r.GBID, File: files[0]})
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	if len(errs) > 0 {
-		return out, errors.New(strings.Join(errs, "; "))
-	}
-	return out, nil
 }
 
 // LoaderStatus reports the NeoModLoader install.

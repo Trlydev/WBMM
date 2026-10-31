@@ -14,9 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Trlydev/WBMM/internal/desktop"
 	"github.com/Trlydev/WBMM/internal/gui"
 	"github.com/Trlydev/WBMM/internal/manager"
+	"github.com/Trlydev/WBMM/internal/selfupdate"
 	"github.com/Trlydev/WBMM/internal/sources"
+	"github.com/Trlydev/WBMM/internal/steam"
 )
 
 // version is set at build time (-X main.version=v0.1.N).
@@ -25,28 +28,41 @@ var version = "dev"
 const usage = `WorldBox Mod Manager (wbmm) %s
 
 Usage:
-  wbmm                          open the window
+  wbmm                          open the window (also: wbmm gui)
   wbmm list                     installed mods (Mods folder and Workshop)
   wbmm search [-workshop] WORDS search GameBanana (or the Steam Workshop)
   wbmm install gb:ID [-file N]  install a GameBanana mod (ID or link)
+  wbmm subscribe ws:ID          subscribe to a Workshop mod through Steam
+  wbmm unsubscribe ws:ID        unsubscribe (Steam removes it)
   wbmm remove UID               delete a mod from the Mods folder
   wbmm enable UID | disable UID turn a mod on or off (game closed)
   wbmm updates [-yes]           check GameBanana mods for updates
   wbmm nml [install]            NeoModLoader status, or install/update it
+  wbmm self-update              update wbmm to the newest release
+  wbmm install-app [no-desktop] install as an app (menu entry, shortcut)
+  wbmm uninstall-app            remove the app (mods and settings stay)
   wbmm version
 
 Set WBMM_GAME_DIR to use a WorldBox folder Steam doesn't know about.
 `
 
 func main() {
-	attachConsole()
+	args := os.Args[1:]
+	// The Steam helper is a separate process started by the window; it
+	// must not touch settings or consoles.
+	if len(args) > 0 && args[0] == "steam-helper" {
+		os.Exit(steam.RunHelper(args[1:]))
+	}
+	if len(args) > 0 {
+		attachConsole()
+	}
 	sources.UserAgent = fmt.Sprintf("wbmm/%s (+https://github.com/Trlydev/WBMM)", version)
+	selfupdate.Current = version
 	m, err := manager.Open()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "warning: couldn't read wbmm's settings:", err)
 	}
-	args := os.Args[1:]
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "gui" {
 		setupLog()
 		if err := gui.Run(m, version); err != nil {
 			log.Fatal(err)
@@ -157,6 +173,62 @@ func run(m *manager.Manager, cmd string, args []string) error {
 			return err
 		}
 		fmt.Println("Installed:", strings.Join(names, ", "))
+
+	case "subscribe", "unsubscribe":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: wbmm %s ws:ID", cmd)
+		}
+		id, ok := sources.ParseWSRef(args[0])
+		if !ok {
+			id, ok = sources.ParseWSRef("ws:" + args[0])
+		}
+		if !ok {
+			return fmt.Errorf("%q is not a Workshop ID or link", args[0])
+		}
+		if cmd == "unsubscribe" {
+			if err := m.Unsubscribe(id); err != nil {
+				return err
+			}
+			fmt.Println("Unsubscribed; Steam removes the files.")
+			return nil
+		}
+		last := ""
+		err := m.Subscribe(id, func(p steam.Progress) {
+			line := "waiting for Steam…"
+			if p.Phase == "downloading" && p.Total > 0 {
+				line = fmt.Sprintf("downloading %d%%", p.Done*100/p.Total)
+			}
+			if line != last {
+				fmt.Println(line)
+				last = line
+			}
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Println("Subscribed and downloaded.")
+
+	case "self-update":
+		rel, err := selfupdate.Latest()
+		if err != nil {
+			return err
+		}
+		if !rel.Newer {
+			fmt.Printf("wbmm %s is up to date (newest: %s).\n", version, rel.Version)
+			return nil
+		}
+		return selfupdate.Apply(rel, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+
+	case "install-app":
+		exe, err := desktop.Install(desktop.Options{DesktopShortcut: !(len(args) > 0 && args[0] == "no-desktop"), Version: version},
+			func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+		if err != nil {
+			return err
+		}
+		fmt.Println("Installed:", exe)
+
+	case "uninstall-app":
+		return desktop.Uninstall(func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 
 	case "remove", "enable", "disable":
 		if len(args) != 1 {

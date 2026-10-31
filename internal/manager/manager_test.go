@@ -7,6 +7,7 @@ import (
 
 	"github.com/Trlydev/WBMM/internal/game"
 	"github.com/Trlydev/WBMM/internal/nml"
+	"github.com/Trlydev/WBMM/internal/sources"
 )
 
 func write(t *testing.T, p, s string) {
@@ -122,5 +123,46 @@ func TestReplaceDir(t *testing.T) {
 	}
 	if _, err := os.Stat(dst + ".wbmm-old"); !os.IsNotExist(err) {
 		t.Error("backup left behind")
+	}
+}
+
+func TestFileLine(t *testing.T) {
+	same := [][2]string{
+		{"warbox010.zip", "warbox050.zip"},
+		{"powerbox.zip", "powerbox_cfdfc.zip"},
+		{"MyMod_v1.2.zip", "mymod-v2.0.7.7z"},
+		{"modernbox-m5.zip", "modernbox-m5-2.zip"},
+	}
+	for _, c := range same {
+		if fileLine(c[0]) != fileLine(c[1]) {
+			t.Errorf("%s and %s should be one line (%q, %q)", c[0], c[1], fileLine(c[0]), fileLine(c[1]))
+		}
+	}
+	different := [][2]string{
+		{"modernbox-m1.zip", "modernbox-m5.zip"},
+		{"modernbox-m1.zip", "modernbox-m1-new.zip"},
+		{"ancientbox.zip", "medievalbox.zip"},
+	}
+	for _, c := range different {
+		if fileLine(c[0]) == fileLine(c[1]) {
+			t.Errorf("%s and %s should be different lines (%q)", c[0], c[1], fileLine(c[0]))
+		}
+	}
+}
+
+func TestNewerOnLine(t *testing.T) {
+	files := []sources.GBFile{ // newest first, as GBFiles returns them
+		{ID: 5, Name: "modernbox-m5-new.zip", Added: 500},
+		{ID: 4, Name: "modernbox-m1-new.zip", Added: 400},
+		{ID: 3, Name: "modernbox-m1.zip", Added: 300},
+		{ID: 2, Name: "modernbox-m5.zip", Added: 200},
+		{ID: 1, Name: "modernbox-m1.zip", Added: 100},
+	}
+	// m1 installed: the newer m1 file, not the newest file (m5).
+	if f, ok := newerOnLine(files, Record{FileID: 1, FileName: "modernbox-m1.zip", FileAdded: 100}); !ok || f.ID != 3 {
+		t.Errorf("m1: got %+v, %v", f, ok)
+	}
+	if _, ok := newerOnLine(files, Record{FileID: 3, FileName: "modernbox-m1.zip", FileAdded: 300}); ok {
+		t.Error("newest of its line reported as outdated")
 	}
 }

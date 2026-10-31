@@ -42,3 +42,19 @@ func TestParseRefs(t *testing.T) {
 		t.Error("ParseWSRef accepted a too-short id")
 	}
 }
+
+func TestHTMLText(t *testing.T) {
+	got := HTMLText(`<h2>Features</h2><ul><li>Guns &amp; tanks</li><li>Nukes</li></ul><p>Have <b>fun</b>!<br>Bye</p>`)
+	want := "Features\n\n• Guns & tanks\n• Nukes\n\nHave fun!\nBye"
+	if got != want {
+		t.Errorf("HTMLText = %q, want %q", got, want)
+	}
+}
+
+func TestBBText(t *testing.T) {
+	got := BBText("[h1]ModernBox[/h1]\r\n[list][*]Guns[*]Bombs[/list]\r\n[url=https://x.y]Discord[/url]")
+	want := "ModernBox\n• Guns• Bombs\nDiscord"
+	if got != want {
+		t.Errorf("BBText = %q, want %q", got, want)
+	}
+}

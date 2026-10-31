@@ -7,9 +7,14 @@ import (
 	"time"
 )
 
-// Config is what the person set in Setup.
+// Config is what the person set in Setup. The zero value is the default:
+// both kinds of automatic update on.
 type Config struct {
 	GameDir string `json:"gameDir,omitempty"`
+	// NoModUpdates stops installing GameBanana mod updates automatically.
+	NoModUpdates bool `json:"noModUpdates,omitempty"`
+	// NoAppUpdates stops wbmm updating itself.
+	NoAppUpdates bool `json:"noAppUpdates,omitempty"`
 }
 
 // Record is a mod wbmm installed from GameBanana, so it can be updated.

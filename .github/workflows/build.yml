@@ -1,8 +1,9 @@
 name: build
 
-# Every push to main publishes a new release, v0.1.<patch>: the patch is one
-# more than the newest v0.1.* tag. Pushing a tag like v1.2.3 publishes that
-# exact version instead. Pull requests only test and build.
+# Every push to main publishes a new release, v0.2.<patch>: the patch is one
+# more than the newest v0.2.* tag (the native window began the 0.2 series).
+# Pushing a tag like v1.2.3 publishes that exact version instead. Pull
+# requests only test and build.
 on:
   push:
     branches: [main]
@@ -28,23 +29,17 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
+      - name: Window toolkit headers (the window uses OpenGL)
+        run: sudo apt-get update -q && sudo apt-get install -y -q libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
-      - run: GOOS=windows go vet ./...
       - run: go test ./...
 
-  build:
-    needs: test
+  version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: go.mod
       - name: Pick version
         id: ver
         env:
@@ -53,30 +48,109 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
             v="${GITHUB_REF_NAME}"
           elif [ "${GITHUB_REF}" = refs/heads/main ] && [ "${GITHUB_EVENT_NAME}" = push ]; then
-            last=$(git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v0.1.*' \
-              | grep -oE 'v0\.1\.[0-9]+' | cut -d. -f3 | sort -n | tail -1)
-            v="v0.1.$(( ${last:--1} + 1 ))"
+            last=$(git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v0.2.*' \
+              | grep -oE 'v0\.2\.[0-9]+' | cut -d. -f3 | sort -n | tail -1)
+            v="v0.2.$(( ${last:--1} + 1 ))"
           else
             v="v0.0.0-dev.${GITHUB_RUN_NUMBER}"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building $v"
-      - name: Build binaries
+
+  # The window (Fyne) needs cgo, so each OS builds its own binary.
+  build-linux:
+    needs: [test, version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Window toolkit headers
+        run: sudo apt-get update -q && sudo apt-get install -y -q libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+      - name: Build
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           mkdir dist
-          flags="-s -w -X main.version=${VERSION}"
-          export CGO_ENABLED=0
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$flags -H windowsgui" -o dist/wbmm-windows-amd64.exe ./cmd/wbmm
-          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$flags -H windowsgui" -o dist/wbmm-windows-arm64.exe ./cmd/wbmm
-          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$flags" -o dist/wbmm-linux-amd64 ./cmd/wbmm
-          GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "$flags" -o dist/wbmm-linux-arm64 ./cmd/wbmm
-          GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$flags" -o dist/wbmm-macos-arm64 ./cmd/wbmm
-          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o dist/wbmm-linux-amd64 ./cmd/wbmm
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: wbmm-${{ steps.ver.outputs.version }}
+          name: part-linux
+          path: dist/*
+
+  build-windows:
+    needs: [test, version]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Windows icon and version info
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3 # module checksum verified by sum.golang.org
+          num=$(echo "${VERSION#v}" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/')
+          case "$num" in *[!0-9.]*|"") num=0.0.0 ;; esac
+          go-winres simply --arch amd64 --out cmd/wbmm/rsrc \
+            --icon internal/desktop/icons/icon-256.png --manifest gui \
+            --product-name "WorldBox Mod Manager" --file-description "WorldBox Mod Manager" \
+            --original-filename wbmm.exe --product-version "$num.0" --file-version "$num.0"
+      - name: Build
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir dist
+          # A GUI program: no console window on double-click.
+          CGO_ENABLED=1 go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${VERSION}" \
+            -o dist/wbmm-windows-amd64.exe ./cmd/wbmm
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: part-windows
+          path: dist/*
+
+  build:
+    needs: [version, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: part-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      # wbmm's self-update only trusts a SHA256SUMS.txt signed with the
+      # release key (the secret is used by this step alone).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: github.event_name == 'push'
+        with:
+          persist-credentials: false
+          path: src
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        if: github.event_name == 'push'
+        with:
+          go-version-file: src/go.mod
+          cache: false
+      - name: Sign checksums
+        if: github.event_name == 'push'
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: cd src && go run ./cmd/signrelease ../dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wbmm-${{ needs.version.outputs.version }}
           path: dist/*
 
   release:
@@ -98,9 +172,9 @@ jobs:
           generate_release_notes: true
           make_latest: true
           body: |
-            **Windows:** download `wbmm-windows-amd64.exe` and double-click it. SmartScreen may warn because the program isn't code-signed: choose "More info" → "Run anyway".
-            **Linux:** download `wbmm-linux-amd64`, then `chmod +x wbmm-linux-amd64 && ./wbmm-linux-amd64`.
-            **macOS (Apple silicon):** `wbmm-macos-arm64`, untested.
+            **Windows:** download `wbmm-windows-amd64.exe` and double-click it, then click **Install** in the banner. It adds WorldBox Mod Manager to the Start menu and desktop (no admin needed); you can delete the download afterwards. SmartScreen may warn because the program isn't code-signed: choose "More info" → "Run anyway".
+            **Linux:** download `wbmm-linux-amd64`, run `chmod +x wbmm-linux-amd64 && ./wbmm-linux-amd64`, then click **Install**. It goes to `~/.local/bin` with an app-menu entry and desktop shortcut.
+            Already installed? wbmm updates itself.
 
-            Verify downloads against `SHA256SUMS.txt`.
+            Verify downloads against `SHA256SUMS.txt` (signed: `SHA256SUMS.txt.sig`).
           files: dist/*

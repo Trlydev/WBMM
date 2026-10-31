@@ -39,6 +39,8 @@ type GBMod struct {
 			Base string `json:"_sBaseUrl"`
 			File string `json:"_sFile"`
 			F220 string `json:"_sFile220"`
+			F530 string `json:"_sFile530"`
+			F800 string `json:"_sFile800"`
 		} `json:"_aImages"`
 	} `json:"_aPreviewMedia"`
 }
@@ -178,4 +180,49 @@ func ParseGBRef(s string) (int, bool) {
 	s = strings.TrimPrefix(s, "gb:")
 	id, err := strconv.Atoi(s)
 	return id, err == nil && id > 0
+}
+
+// GBProfile is a mod's full page: description, screenshots and files.
+type GBProfile struct {
+	GBMod
+	Text        string   `json:"_sText"` // HTML
+	Description string   `json:"_sDescription"`
+	Downloads   int      `json:"_nDownloadCount"`
+	Files       []GBFile `json:"_aFiles"`
+}
+
+// Screenshots returns the mod's images, large size first choice.
+func (p GBProfile) Screenshots() []string {
+	var out []string
+	for _, im := range p.Preview.Images {
+		f := im.F800
+		if f == "" {
+			f = im.F530
+		}
+		if f == "" {
+			f = im.File
+		}
+		if im.Base != "" && f != "" {
+			out = append(out, im.Base+"/"+f)
+		}
+	}
+	return out
+}
+
+// GBGetProfile returns a WorldBox mod's full page, files newest first.
+func GBGetProfile(id int) (*GBProfile, error) {
+	var p GBProfile
+	if err := getJSON(fmt.Sprintf("%s/Mod/%d/ProfilePage", gbAPI, id), &p); err != nil {
+		return nil, err
+	}
+	if p.Game.ID != GBGameID {
+		return nil, fmt.Errorf("GameBanana mod %d is not a WorldBox mod", id)
+	}
+	fs := p.Files
+	for i := 1; i < len(fs); i++ {
+		for j := i; j > 0 && fs[j].Added > fs[j-1].Added; j-- {
+			fs[j], fs[j-1] = fs[j-1], fs[j]
+		}
+	}
+	return &p, nil
 }

@@ -1,0 +1,106 @@
+name: build
+
+# Every push to main publishes a new release, v0.1.<patch>: the patch is one
+# more than the newest v0.1.* tag. Pushing a tag like v1.2.3 publishes that
+# exact version instead. Pull requests only test and build.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default; only the release job can write.
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: GOOS=windows go vet ./...
+      - run: go test ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Pick version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            v="${GITHUB_REF_NAME}"
+          elif [ "${GITHUB_REF}" = refs/heads/main ] && [ "${GITHUB_EVENT_NAME}" = push ]; then
+            last=$(git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v0.1.*' \
+              | grep -oE 'v0\.1\.[0-9]+' | cut -d. -f3 | sort -n | tail -1)
+            v="v0.1.$(( ${last:--1} + 1 ))"
+          else
+            v="v0.0.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building $v"
+      - name: Build binaries
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          mkdir dist
+          flags="-s -w -X main.version=${VERSION}"
+          export CGO_ENABLED=0
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$flags -H windowsgui" -o dist/wbmm-windows-amd64.exe ./cmd/wbmm
+          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$flags -H windowsgui" -o dist/wbmm-windows-arm64.exe ./cmd/wbmm
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$flags" -o dist/wbmm-linux-amd64 ./cmd/wbmm
+          GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "$flags" -o dist/wbmm-linux-arm64 ./cmd/wbmm
+          GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$flags" -o dist/wbmm-macos-arm64 ./cmd/wbmm
+          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wbmm-${{ steps.ver.outputs.version }}
+          path: dist/*
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: wbmm-${{ needs.build.outputs.version }}
+          path: dist
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ needs.build.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: wbmm ${{ needs.build.outputs.version }}
+          generate_release_notes: true
+          make_latest: true
+          body: |
+            **Windows:** download `wbmm-windows-amd64.exe` and double-click it. SmartScreen may warn because the program isn't code-signed: choose "More info" → "Run anyway".
+            **Linux:** download `wbmm-linux-amd64`, then `chmod +x wbmm-linux-amd64 && ./wbmm-linux-amd64`.
+            **macOS (Apple silicon):** `wbmm-macos-arm64`, untested.
+
+            Verify downloads against `SHA256SUMS.txt`.
+          files: dist/*

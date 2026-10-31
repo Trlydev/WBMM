@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorldBox Mod Manager</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon.svg" alt=""><span>WorldBox Mod Manager</span></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="browse" class="active">Browse</button>
+    <button role="tab" data-tab="installed">Installed <span id="count" class="count"></span></button>
+    <button role="tab" data-tab="setup">Setup</button>
+  </nav>
+  <div class="chips">
+    <span id="chip-running" class="chip warn" hidden>Game running</span>
+    <span id="chip-nml" class="chip">NML …</span>
+  </div>
+</header>
+
+<div id="banners"></div>
+
+<main>
+  <section id="tab-browse" class="tab">
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Source">
+        <button data-src="gamebanana" class="active">GameBanana</button>
+        <button data-src="workshop">Steam Workshop</button>
+      </div>
+      <form id="search" class="search">
+        <input id="q" type="search" placeholder="Search mods, or paste a link" autocomplete="off">
+        <select id="sort" aria-label="Sort"></select>
+        <button type="submit" class="btn">Search</button>
+      </form>
+    </div>
+    <p id="src-note" class="note"></p>
+    <div id="grid" class="grid"></div>
+    <div class="more"><button id="more" class="btn ghost" hidden>Load more</button></div>
+  </section>
+
+  <section id="tab-installed" class="tab" hidden>
+    <div class="toolbar">
+      <input id="filter" type="search" placeholder="Filter installed mods" autocomplete="off">
+      <div class="actions">
+        <button id="check-updates" class="btn ghost">Check for updates</button>
+        <button id="open-mods" class="btn ghost">Open Mods folder</button>
+      </div>
+    </div>
+    <p class="note">Switches take effect the next time WorldBox starts. Close the game before changing them.</p>
+    <div id="list" class="list"></div>
+  </section>
+
+  <section id="tab-setup" class="tab" hidden>
+    <div class="card-box">
+      <h2>NeoModLoader</h2>
+      <p class="muted">The mod loader WorldBox mods need. It goes in the game's <code>StreamingAssets/mods</code> folder.</p>
+      <div id="nml-box" class="nml-box">Checking…</div>
+    </div>
+    <div class="card-box">
+      <h2>Game folder</h2>
+      <p id="game-found" class="muted"></p>
+      <form id="game-form" class="row">
+        <input id="game-dir" type="text" placeholder="Leave empty to find WorldBox through Steam" autocomplete="off">
+        <button type="submit" class="btn">Save</button>
+      </form>
+    </div>
+    <div class="card-box">
+      <h2>How it works</h2>
+      <ul class="how">
+        <li><b>GameBanana</b> mods are downloaded, unpacked and put in <code>worldbox/Mods</code>. wbmm remembers where each came from, so it can update it.</li>
+        <li><b>Steam Workshop</b> mods are installed by Steam: <i>Subscribe in Steam</i> opens the mod in the Steam client, you click Subscribe, and NeoModLoader loads it from Steam's Workshop folder. Unsubscribe there to remove it.</li>
+        <li>Turning a mod off writes to NeoModLoader's own mod list, the same one its in-game Mods window uses.</li>
+        <li>Turn on <b>Experimental Mode</b> in WorldBox's settings the first time, or mods won't load.</li>
+      </ul>
+      <p class="muted">Mods are code that runs on your PC. Install mods from authors you trust. wbmm checks GameBanana's virus scan before installing, but no scan catches everything.</p>
+    </div>
+    <p class="muted about">wbmm <span id="version"></span> · <a href="#" data-url="https://github.com/Trlydev/WBMM">github.com/Trlydev/WBMM</a> · Not affiliated with Maxim Karpenko, Valve, GameBanana or the NeoModLoader team.</p>
+  </section>
+</main>
+
+<dialog id="files-dlg">
+  <form method="dialog" class="dlg-head">
+    <h2 id="files-title">Files</h2>
+    <button class="x" aria-label="Close">✕</button>
+  </form>
+  <p class="muted">Pick which file to install. The newest is first.</p>
+  <div id="files" class="files"></div>
+</dialog>
+
+<dialog id="confirm-dlg">
+  <h2 id="confirm-title"></h2>
+  <p id="confirm-text"></p>
+  <div class="dlg-actions">
+    <button id="confirm-no" class="btn ghost">Cancel</button>
+    <button id="confirm-yes" class="btn danger">OK</button>
+  </div>
+</dialog>
+
+<div id="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

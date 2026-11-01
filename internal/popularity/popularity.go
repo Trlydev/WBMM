@@ -66,6 +66,24 @@ type Index struct {
 	Generated time.Time `json:"generated"`
 	Since     string    `json:"since"` // oldest snapshot used
 	Items     []Item    `json:"items"`
+	// Game is the newest WorldBox version series and when it came out:
+	// mods last updated before then may not work.
+	Game *Game `json:"game,omitempty"`
+	// Provides maps a mod's NeoModLoader ID (as nml.Symbol writes it) to
+	// the GameBanana item that installs it, for fetching dependencies.
+	Provides map[string]string `json:"provides,omitempty"`
+}
+
+// Game is a WorldBox version series.
+type Game struct {
+	Version  string `json:"version"`
+	Released int64  `json:"released"` // unix time
+}
+
+// Outdated reports whether something last updated at t predates the
+// current game version.
+func (ix *Index) Outdated(t int64) bool {
+	return ix != nil && ix.Game != nil && t > 0 && t < ix.Game.Released
 }
 
 // Compute fills each item's D/W/M from the snapshots (oldest first; the

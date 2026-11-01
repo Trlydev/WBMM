@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/Trlydev/WBMM/internal/game"
 )
 
 // What NeoModLoader wrote about each mod the last time the game started,
@@ -44,24 +46,16 @@ var (
 	reIndentEntry = regexp.MustCompile(`^\s{2,}(\S.*)$`)
 )
 
-// PlayerLogs lists where Unity keeps WorldBox's log on this PC, newest
-// candidates first; gameDir finds the Proton prefix of a Windows build run
-// on Linux.
+// PlayerLogs lists where Unity keeps WorldBox's log on this PC; gameDir
+// finds the Proton prefix of a Windows build run on Linux.
 func PlayerLogs(gameDir string) []string {
-	home, _ := os.UserHomeDir()
-	rel := filepath.Join("mkarpenko", "WorldBox", "Player.log")
+	if runtime.GOOS == "darwin" { // macOS keeps logs apart from data
+		home, _ := os.UserHomeDir()
+		return []string{filepath.Join(home, "Library", "Logs", "mkarpenko", "WorldBox", "Player.log")}
+	}
 	var out []string
-	switch runtime.GOOS {
-	case "windows":
-		out = append(out, filepath.Join(home, "AppData", "LocalLow", rel))
-	case "darwin":
-		out = append(out, filepath.Join(home, "Library", "Logs", rel))
-	default:
-		out = append(out, filepath.Join(home, ".config", "unity3d", rel))
-		if gameDir != "" {
-			out = append(out, filepath.Join(gameDir, "..", "..", "compatdata", "1206560", "pfx", "drive_c",
-				"users", "steamuser", "AppData", "LocalLow", rel))
-		}
+	for _, d := range game.UserDataDirs(gameDir) {
+		out = append(out, filepath.Join(d, "Player.log"))
 	}
 	return out
 }

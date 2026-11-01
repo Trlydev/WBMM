@@ -62,6 +62,8 @@ type ui struct {
 
 	ops       map[string]*op
 	opButtons map[string][]*widget.Button
+	prechecks map[int]*precheck // by GameBanana file ID
+	release   *popularity.Game  // the current WorldBox version, once known
 
 	mine   *myModsPage
 	get    *getModsPage
@@ -386,18 +388,24 @@ func (u *ui) play() {
 		d.Show()
 		return
 	}
-	held := 0
-	for _, md := range u.mine.mods {
-		if v, current := u.m.Verdict(md.Folder); current && v.Blocked() {
-			held++
+	// A last safety check: Steam may have updated a Workshop mod since the
+	// last one, and the game loads mods as it starts.
+	u.say("Checking your mods before the game starts…")
+	go func() {
+		held, err := u.m.CheckAll()
+		if err != nil {
+			log.Printf("safety check: %v", err)
 		}
-	}
-	if held > 0 {
-		u.say("Starting WorldBox. %d mod(s) stay off until you review them under Installed.", held)
-		u.openURL("steam://rungameid/" + game.AppID)
-		return
-	}
-	start()
+		fyne.Do(func() {
+			u.mine.paint()
+			if len(held) > 0 {
+				u.fail(errors.New(heldMessage(held)))
+				u.openURL("steam://rungameid/" + game.AppID)
+				return
+			}
+			start()
+		})
+	}()
 }
 
 func (u *ui) installLoader() {
@@ -453,6 +461,7 @@ func (u *ui) restart() {
 func (u *ui) background() {
 	go pruneImageCache()
 	go desktop.Refresh()
+	go u.loadGameRelease()
 	u.refreshStatus(true)
 	fyne.Do(func() { u.mine.reload() })
 	time.Sleep(3 * time.Second)
@@ -483,6 +492,7 @@ func (u *ui) background() {
 		}
 		if time.Since(lastMods) > 6*time.Hour && !game.Running() {
 			lastMods = time.Now()
+			go u.loadGameRelease()
 			if name, err := u.m.AutoUpdateLoader(); err != nil {
 				log.Printf("NeoModLoader update: %v", err)
 			} else if name != "" {

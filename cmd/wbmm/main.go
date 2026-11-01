@@ -36,14 +36,16 @@ Usage:
   wbmm                          open the window (also: wbmm gui)
   wbmm list                     installed mods (Mods folder and Workshop)
   wbmm search [-workshop] WORDS search GameBanana (or the Steam Workshop)
-  wbmm install gb:ID [-file N]  install a GameBanana mod (ID or link)
+  wbmm install gb:ID [-file N]  install a GameBanana mod (ID or link) and what it
+                                needs (-no-deps: just it); a map goes into a save slot
   wbmm subscribe ws:ID          subscribe to a Workshop mod through Steam
   wbmm unsubscribe ws:ID        unsubscribe (Steam removes it)
   wbmm remove UID               delete a mod from the Mods folder
   wbmm enable UID | disable UID turn a mod on or off (game closed)
   wbmm updates [-yes]           check GameBanana mods for updates
   wbmm nml [install]            NeoModLoader status, or install/update it
-  wbmm scan PATH [-json]        check a mod folder or archive for malware patterns
+  wbmm scan PATH|gb:ID [-json]  check a mod folder, archive or GameBanana file
+                                (-file N) for malware patterns, installing nothing
   wbmm check                    check every installed mod; hold risky ones
   wbmm accept UID|ws:ID         allow a mod the safety check holds
   wbmm pack save NAME [FILE]    save the installed mods as a modpack (.wbm)
@@ -168,6 +170,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		file := fs.Int("file", 0, "GameBanana file ID (default: newest)")
 		force := fs.Bool("force", false, "install even if GameBanana's virus scan hasn't passed it")
 		accept := fs.Bool("accept-risk", false, "install even if wbmm's safety check found CRITICAL things")
+		noDeps := fs.Bool("no-deps", false, "don't install the mods it needs")
 		if err := fs.Parse(reorder(args)); err != nil {
 			return err
 		}
@@ -180,6 +183,14 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		id, ok := sources.ParseGBRef(fs.Arg(0))
 		if !ok {
 			return fmt.Errorf("%q is not a GameBanana mod ID or link", fs.Arg(0))
+		}
+		if mod, err := sources.GBGetMod(id); err == nil && mod.IsMap() {
+			slots, err := m.InstallMap(id, *file, *force)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Put %s into save slot %s. Load it from WorldBox's Saves.\n", mod.Name, strings.Join(slots, ", "))
+			return nil
 		}
 		names, err := m.InstallGB(id, *file, *force, *accept)
 		if err != nil {
@@ -199,6 +210,21 @@ func run(m *manager.Manager, cmd string, args []string) error {
 			return err
 		}
 		fmt.Println("Installed:", strings.Join(names, ", "))
+		for _, d := range manager.FindDependencies(m.NeedsOf(id)) {
+			switch {
+			case d.GBID == 0:
+				fmt.Printf("It needs %s, which wbmm can't find on GameBanana: see the mod's page.\n", d.ID)
+			case *noDeps:
+				fmt.Printf("It needs %s: wbmm install gb:%d\n", d.Name, d.GBID)
+			default:
+				fmt.Printf("It needs %s; installing it…\n", d.Name)
+				if names, err := m.InstallGB(d.GBID, 0, false, false); err != nil {
+					fmt.Printf("  couldn't: %v (wbmm install gb:%d)\n", err, d.GBID)
+				} else {
+					fmt.Println("  Installed:", strings.Join(names, ", "))
+				}
+			}
+		}
 
 	case "subscribe", "unsubscribe":
 		if len(args) != 1 {
@@ -244,11 +270,32 @@ func run(m *manager.Manager, cmd string, args []string) error {
 
 	case "scan":
 		asJSON := fs.Bool("json", false, "print the report as JSON")
+		file := fs.Int("file", 0, "GameBanana file ID (default: newest)")
 		if err := fs.Parse(reorder(args)); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: wbmm scan PATH [-json]")
+			return errors.New("usage: wbmm scan PATH|gb:ID [-json]")
+		}
+		if id, ok := sources.ParseGBRef(fs.Arg(0)); ok && !fileExists(fs.Arg(0)) {
+			pc, err := m.PrecheckGB(id, *file)
+			if err != nil {
+				return err
+			}
+			if *asJSON {
+				return json.NewEncoder(os.Stdout).Encode(pc)
+			}
+			fmt.Printf("%s: %s\n", pc.File.Name, verdictWords(pc.Verdict))
+			for _, f := range pc.Verdict.Findings {
+				fmt.Printf("%-8s %-22s %s  %s\n", f.Severity, f.Rule, f.File, f.Detail)
+			}
+			if pc.Problem != "" {
+				fmt.Println("It won't install as a mod:", pc.Problem)
+			}
+			for _, d := range manager.FindDependencies(pc.Needs) {
+				fmt.Println("It needs", d.Name)
+			}
+			return nil
 		}
 		rep, err := scanPath(m, fs.Arg(0))
 		if err != nil {
@@ -488,4 +535,17 @@ func reorder(args []string) []string {
 		rest = append(rest, args[i])
 	}
 	return append(flags, rest...)
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// verdictWords sums up a safety check.
+func verdictWords(v manager.Verdict) string {
+	switch {
+	case v.Max >= scan.Critical:
+		return "serious findings: its code does things malware does"
+	case v.Max >= scan.High:
+		return "worth a look"
+	}
+	return "nothing worrying found"
 }

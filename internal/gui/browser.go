@@ -3,6 +3,8 @@ package gui
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -224,10 +226,13 @@ func (b *browser) load(reset bool) {
 
 // repaint rebuilds the rows (installed marks and selection change).
 func (b *browser) repaint() {
-	gb, ws := b.u.m.InstalledGB(), b.u.m.Subscribed()
+	gb, ws, maps := b.u.m.InstalledGB(), b.u.m.Subscribed(), b.u.m.InstalledMaps()
 	rows := make([]fyne.CanvasObject, 0, len(b.cards))
 	for _, c := range b.cards {
 		have := c.Source == "gamebanana" && gb[atoi(c.ID)] || c.Source == "workshop" && ws[c.ID]
+		if c.Kind == "map" {
+			have = len(maps[atoi(c.ID)]) > 0
+		}
 		rows = append(rows, b.row(c, have))
 	}
 	b.list.Objects = rows
@@ -258,6 +263,9 @@ func (b *browser) row(c modCard, have bool) fyne.CanvasObject {
 	if u := ago(c.Updated); u != "" {
 		meta = append(meta, u)
 	}
+	if c.Kind == "mod" && b.u.outdated(c.Updated) && b.u.release != nil {
+		meta = append(meta, "before WorldBox "+b.u.release.Version)
+	}
 	stats := c.Stat
 	switch {
 	case stats != "":
@@ -273,9 +281,12 @@ func (b *browser) row(c modCard, have bool) fyne.CanvasObject {
 
 	var action fyne.CanvasObject
 	switch {
+	case c.Kind == "map" && have:
+		action = badge("installed", p.grass)
 	case c.Kind == "map":
-		btn := widget.NewButton("Get", func() { b.u.openURL(c.URL) })
+		btn := widget.NewButton("Install", func() { b.u.installMap(atoi(c.ID), c.Name, false) })
 		btn.Importance = widget.HighImportance
+		b.u.bindOp(b.u.opKey(c.Source, c.ID), btn)
 		action = btn
 	case have && c.Source == "workshop":
 		action = badge("subscribed", p.grass)
@@ -436,13 +447,31 @@ func fetchWorkshop(tag string) func(*ui, string, string, int) ([]modCard, bool, 
 	}
 }
 
-// fetchSubscribedWorlds lists the Workshop worlds Steam has downloaded,
-// named and pictured from the Workshop where it still has them.
-func fetchSubscribedWorlds(u *ui, q, _ string, _ int) ([]modCard, bool, error) {
+// fetchInstalledWorlds lists the Workshop worlds Steam has downloaded,
+// named and pictured from the Workshop where it still has them, and the
+// GameBanana maps wbmm put into save slots.
+func fetchInstalledWorlds(u *ui, q, _ string, _ int) ([]modCard, bool, error) {
 	worlds, err := u.m.Worlds()
 	if err != nil {
 		return nil, false, err
 	}
+	var cards []modCard
+	installed := map[string]int64{}
+	for id, recs := range u.m.InstalledMaps() {
+		r := recs[0]
+		var slots []string
+		for _, r := range recs {
+			slots = append(slots, filepath.Base(r.Slot))
+		}
+		c := modCard{Source: "gamebanana", Kind: "map", ID: strconv.Itoa(id), Name: r.Name,
+			Local: filepath.Join(r.Slot, "preview.png"), URL: fmt.Sprintf("https://gamebanana.com/mods/%d", id),
+			Category: "GameBanana map", Stat: "in save slot " + strings.Join(slots, ", ")}
+		if q == "" || strings.Contains(strings.ToLower(c.Name), strings.ToLower(q)) {
+			cards = append(cards, c)
+			installed[c.ID] = r.Installed.Unix()
+		}
+	}
+	sort.Slice(cards, func(i, j int) bool { return installed[cards[i].ID] > installed[cards[j].ID] })
 	var ids []string
 	for _, w := range worlds {
 		ids = append(ids, w.WorkshopID)
@@ -453,7 +482,6 @@ func fetchSubscribedWorlds(u *ui, q, _ string, _ int) ([]modCard, bool, error) {
 			byID[it.ID] = it
 		}
 	}
-	var cards []modCard
 	for _, w := range worlds {
 		c := modCard{Source: "workshop", Kind: "world", ID: w.WorkshopID, Name: w.Name, Local: w.Preview,
 			URL: "https://steamcommunity.com/sharedfiles/filedetails/?id=" + w.WorkshopID, Updated: w.Updated}
@@ -527,18 +555,18 @@ type worldsPage struct{ *browser }
 
 func newWorldsPage(u *ui) *worldsPage {
 	return &worldsPage{newBrowser(u, "Worlds", []browserSource{
-		{key: "subscribed", label: "Subscribed", fetch: fetchSubscribedWorlds,
-			note: "Worlds you're subscribed to. WorldBox lists them in its saves menu; they hold no code."},
+		{key: "installed", label: "Installed", fetch: fetchInstalledWorlds,
+			note: "Workshop worlds you're subscribed to and maps wbmm put into your saves. WorldBox lists them under Saves; they hold no code."},
 		{key: "workshop", label: "Steam Workshop", sorted: true, fetch: fetchWorkshop(sources.TagWorld),
 			note: "Worlds from the Steam Workshop. Subscribe and Steam downloads them."},
 		{key: "gamebanana", label: "GameBanana", sorted: true, fetch: fetchGameBanana(true),
-			note: "World maps from GameBanana. Get opens the map's page to download it."},
+			note: "World maps from GameBanana. Install puts one into a free save slot."},
 	})}
 }
 
 // reload refreshes the subscribed list (the browse tab keeps its results).
 func (w *worldsPage) reload() {
-	if w.sources[w.src].key == "subscribed" {
+	if w.sources[w.src].key == "installed" {
 		w.load(true)
 	} else {
 		w.repaint()

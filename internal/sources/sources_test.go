@@ -1,6 +1,8 @@
 package sources
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -56,5 +58,48 @@ func TestBBText(t *testing.T) {
 	want := "ModernBox\n• Guns• Bombs\nDiscord"
 	if got != want {
 		t.Errorf("BBText = %q, want %q", got, want)
+	}
+}
+
+func TestLatestRelease(t *testing.T) {
+	news := []newsItem{
+		{"Dev Update: Meta Control and ChessBox", 9},
+		{"hotfix 0.51.2 - ArmyBoxing", 8},
+		{"0.51.0 - ArmyBox", 7},
+		{"Awakening the Monolith - Open Beta 0.50 is live!", 5},
+		{"WorldBox Update — 0.50: Monolith Awakens. Open Steam Beta Starts April 1", 4},
+		{"Coming soon: 0.52 sneak peek", 10},
+	}
+	g, err := latestRelease(news)
+	if err != nil || g.Version != "0.51" || g.Released != 7 {
+		t.Fatalf("latestRelease = %+v, %v", g, err)
+	}
+	g, _ = latestRelease(news[3:5])
+	if g.Version != "0.50" || g.Released != 5 {
+		t.Fatalf("0.50 = %+v; the announcement before release doesn't count", g)
+	}
+}
+
+func TestVerify(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	os.WriteFile(p, []byte("hello"), 0o644)
+	f := GBFile{Name: "f.zip", MD5: "5D41402ABC4B2A76B9719D911017C592"}
+	if err := f.Verify(p); err != nil {
+		t.Fatal(err)
+	}
+	f.MD5 = "00000000000000000000000000000000"
+	if f.Verify(p) == nil {
+		t.Fatal("a different file passed")
+	}
+	for u, want := range map[string]bool{
+		"https://gamebanana.com/dl/1":              true,
+		"https://files.gamebanana.com/mods/x.zip":  true,
+		"http://gamebanana.com/dl/1":               false,
+		"https://gamebanana.com.evil.example/dl/1": false,
+		"https://evilgamebanana.com/dl/1":          false,
+	} {
+		if got := (GBFile{DownloadURL: u}).FromGameBanana(); got != want {
+			t.Errorf("FromGameBanana(%s) = %v", u, got)
+		}
 	}
 }

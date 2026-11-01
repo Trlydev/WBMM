@@ -44,6 +44,8 @@ type state struct {
 	Skipped map[int]int `json:"skipped,omitempty"`
 	// Verdicts of the malware scanner, by mod folder.
 	Verdicts map[string]Verdict `json:"verdicts,omitempty"`
+	// Maps put into save slots, by slot folder.
+	Maps map[string]MapRecord `json:"maps,omitempty"`
 }
 
 // ConfigDir is wbmm's own folder (settings, state, log).
@@ -57,7 +59,7 @@ func ConfigDir() (string, error) {
 }
 
 func newState() *state {
-	return &state{Records: map[string]Record{}, Verdicts: map[string]Verdict{}, Skipped: map[int]int{}}
+	return &state{Records: map[string]Record{}, Verdicts: map[string]Verdict{}, Skipped: map[int]int{}, Maps: map[string]MapRecord{}}
 }
 
 func statePath() (string, error) {
@@ -96,6 +98,9 @@ func loadState() (*state, error) {
 	}
 	if s.Skipped == nil {
 		s.Skipped = map[int]int{}
+	}
+	if s.Maps == nil {
+		s.Maps = map[string]MapRecord{}
 	}
 	return s, nil
 }

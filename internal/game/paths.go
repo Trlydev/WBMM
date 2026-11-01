@@ -139,3 +139,47 @@ func existing(ps []string) []string {
 	}
 	return out
 }
+
+// UserDataDirs returns where WorldBox may keep its saves and Player.log
+// (Unity's persistent data folder) on this PC. On Linux, a Windows build
+// run through Proton keeps them inside the game's Proton prefix.
+func UserDataDirs(gameDir string) []string {
+	home, _ := os.UserHomeDir()
+	rel := filepath.Join("mkarpenko", "WorldBox")
+	var out []string
+	switch runtime.GOOS {
+	case "windows":
+		out = append(out, filepath.Join(home, "AppData", "LocalLow", rel))
+	case "darwin":
+		out = append(out, filepath.Join(home, "Library", "Application Support", "com.mkarpenko.worldbox"))
+	default:
+		out = append(out, filepath.Join(home, ".config", "unity3d", rel))
+		if gameDir != "" {
+			out = append(out, filepath.Join(gameDir, "..", "..", "compatdata", AppID, "pfx", "drive_c",
+				"users", "steamuser", "AppData", "LocalLow", rel))
+		}
+	}
+	return out
+}
+
+// UserDataDir is the folder of UserDataDirs the game used last: the one
+// with the newest Player.log, else the first that exists.
+func UserDataDir(gameDir string) (string, error) {
+	var best string
+	var bestTime int64
+	for _, d := range UserDataDirs(gameDir) {
+		if fi, err := os.Stat(filepath.Join(d, "Player.log")); err == nil && fi.ModTime().Unix() > bestTime {
+			best, bestTime = d, fi.ModTime().Unix()
+		}
+	}
+	if best != "" {
+		return best, nil
+	}
+	if ds := existing(UserDataDirs(gameDir)); len(ds) > 0 {
+		return ds[0], nil
+	}
+	return "", errors.New("WorldBox's data folder wasn't found: start the game once first")
+}
+
+// SavesDir holds the game's save slots (save1, save2, …).
+func SavesDir(dataDir string) string { return filepath.Join(dataDir, "saves") }

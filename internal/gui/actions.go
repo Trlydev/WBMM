@@ -118,6 +118,10 @@ func (u *ui) installGBWith(id int, f sources.GBFile, name string, force, acceptR
 	u.say("Downloading and checking %s (%s)…", name, size(f.Size))
 	go func() {
 		names, err := u.m.InstallGB(id, f.ID, force, acceptRisk)
+		var needs []string
+		if err == nil {
+			needs = u.m.NeedsOf(id)
+		}
 		fyne.Do(func() {
 			u.endOp(key)
 			var re *manager.RiskError
@@ -131,6 +135,7 @@ func (u *ui) installGBWith(id int, f sources.GBFile, name string, force, acceptR
 				return
 			}
 			u.say("Installed %s. It loads the next time WorldBox starts.", strings.Join(names, ", "))
+			u.installDeps(needs, name)
 		})
 	}()
 }

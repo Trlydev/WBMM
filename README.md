@@ -39,10 +39,11 @@ The window is laid out like a mod manager: a sidebar, a list, and the
 selected item's details beside it.
 
 - **Play WorldBox** starts the game through Steam, after checking that
-  NeoModLoader is there.
+  NeoModLoader is there and running the safety check one last time.
 - **My mods:** every mod NeoModLoader will load (the Mods folder, the game's
   own mods folder and the Workshop) with an on/off switch each. Select one for
-  its safety check result, missing requirements or clashes, updates, its
+  its safety check result, missing requirements (**Install what it needs**
+  fetches them) or clashes, updates, its
   folder, and Remove or Unsubscribe, and **what happened at the last game
   start**: wbmm reads NeoModLoader's lines in the game's log, so a mod that
   didn't compile or load says why, in plain words ("written for a different
@@ -51,15 +52,23 @@ selected item's details beside it.
   the Worlds page); search or paste a link. Sort by **Popularity** (today,
   this week, this month or all time), **Recently updated**, **Newest** or
   **Relevance** (best match for your search). Select one for its
-  screenshots, description, stats and files.
-  - *GameBanana* mods download into `worldbox/Mods`. Mods with several files
-    (versions, ports) let you pick one.
+  screenshots, description, stats and files. Mods last updated before the
+  current WorldBox version came out are marked: they may not work.
+  - *GameBanana* mods download into `worldbox/Mods`. The preview runs the
+    **safety check before you install**: it downloads the file (up to 30 MB
+    straight away, bigger ones when you ask), checks it without installing
+    anything, and says what it found and what the mod needs. Installing
+    then uses that download. Mods with several files (versions, ports) let
+    you pick one. **Mods it needs come with it**, each checked the same way.
   - *Workshop* mods: **Subscribe** subscribes through your Steam client (Steam
     must be running) and shows the download as it happens. Steam keeps the mod
     updated and removes it when you unsubscribe.
 - **Worlds:** worlds and maps, kept apart from mods: the Workshop worlds
   you're subscribed to, more to browse and subscribe to, and GameBanana's
-  maps (sorted the same way; **Get** opens the map's page).
+  maps. **Install** puts a map into a free save slot (only its save files,
+  `map.wbox`, `map.meta` and the previews, are copied; maps hold no code), and
+  WorldBox lists it under Saves. Removing it deletes that slot, unless
+  you've saved over it in the game.
 - **Modpacks:** save your mods as a modpack, share it, open someone else's.
   Saved packs work as profiles: apply one (optionally switching off what
   isn't in it) to swap sets of mods in one click.
@@ -95,18 +104,33 @@ shows the number it's sorted by. Until there's a week or a month of
 history, rows say since when they've been counted. No server, no keys; the branch is
 rewritten each day so it never grows.
 
+The same Action records two more things wbmm uses:
+
+- **The current WorldBox version and its release date**, from the game's
+  announcements on Steam, for the "made before WorldBox 0.51" notes.
+- **Which GameBanana item installs each mod ID**, for dependencies: a
+  mod.json names what it needs by ID (`Lous12.PoliticalWorld`), not by
+  where to get it. The Action reads the mod.json files in each mod's newest
+  file (20 minutes a day until it has read them all, then only new uploads;
+  the archives are unpacked to a temporary folder and nothing in them runs).
+
 ## Safety check
 
 NeoModLoader compiles a mod's C# with the whole .NET framework available, or
 loads its DLLs as they are, and runs them inside the game with no sandbox. So
 wbmm checks every mod's code before it can run:
 
-- **GameBanana mods** before they reach the Mods folder.
+- **GameBanana mods** before they reach the Mods folder, and on their
+  preview page before you decide. Each download must come from GameBanana
+  itself over https and match the checksum GameBanana lists for the file, so
+  a download changed on the way, or a file swapped on the server after
+  GameBanana's own virus scan, is refused.
 - **Workshop mods** right after Steam downloads them. A risky one is switched
   off in NeoModLoader's list before the game can load it.
 - **Every installed mod** again whenever its files change (once a minute),
   which catches Steam's silent Workshop updates: the 2026 People Playground
-  and PlateUp! worms spread through updates of existing mods.
+  and PlateUp! worms spread through updates of existing mods. **Play**
+  checks once more right before the game starts.
 
 The scanner (`internal/scan`, built on SWG's) reads the code NeoModLoader
 would actually load, following its rules exactly (checked against its
@@ -132,7 +156,8 @@ around the scanner) went over it before 0.2.2. It was calibrated on ~240 real Wo
 NeoModLoader itself and one mod's self-updater (it runs a hidden PowerShell
 script to replace itself with whatever its author's server sends) come out
 serious. The tests use harmless samples that only name what malware does.
-`wbmm scan PATH`, `wbmm check` and `wbmm accept` do it from a terminal.
+`wbmm scan PATH`, `wbmm scan gb:ID` (a GameBanana file, without installing
+it), `wbmm check` and `wbmm accept` do it from a terminal.
 
 ## Updates
 
@@ -176,12 +201,14 @@ keys.
 wbmm list                      # installed mods and their IDs
 wbmm search modern             # GameBanana
 wbmm search -workshop modern   # Steam Workshop
-wbmm install gb:462076         # or a gamebanana.com/mods/... link; -file N picks a file
+wbmm install gb:462076         # or a gamebanana.com/mods/... link; -file N picks a file;
+                               # installs what it needs too (-no-deps: don't); maps go into a save slot
 wbmm subscribe ws:3139755386   # through Steam; unsubscribe likewise
 wbmm disable TUXXEGO_MODERNBOX # enable / disable / remove take the ID from list
 wbmm updates [-yes]
 wbmm nml [install]
 wbmm scan ./SomeMod.zip        # safety check a folder or archive
+wbmm scan gb:462076            # or a GameBanana file, without installing it
 wbmm check                     # check every installed mod; hold risky ones
 wbmm pack save "Modern war"    # save the installed mods as a modpack
 wbmm pack apply war.wbm -only  # install a modpack (-only: switch off the rest)

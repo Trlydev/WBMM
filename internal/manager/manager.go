@@ -60,6 +60,7 @@ type Mod struct {
 	WorkshopID string `json:"workshopId,omitempty"`
 	GBID       int    `json:"gbId,omitempty"`
 	FileName   string `json:"fileName,omitempty"`
+	FileAdded  int64  `json:"fileAdded,omitempty"` // when the GameBanana file was uploaded
 	Enabled    bool   `json:"enabled"`
 	URL        string `json:"url,omitempty"`
 	Icon       string `json:"-"`
@@ -182,7 +183,7 @@ func (m *Manager) List() ([]Mod, error) {
 		}
 		md.Source = "local"
 		if r, ok := byFolder[e]; ok && r.UID == md.UID {
-			md.Source, md.GBID, md.FileName = "gamebanana", r.GBID, r.FileName
+			md.Source, md.GBID, md.FileName, md.FileAdded = "gamebanana", r.GBID, r.FileName, r.FileAdded
 			md.URL = fmt.Sprintf("https://gamebanana.com/mods/%d", r.GBID)
 		}
 		out = append(out, md)
@@ -364,7 +365,8 @@ func PickFile(files []sources.GBFile, fileID int) (sources.GBFile, error) {
 }
 
 // InstallGB downloads a GameBanana mod file (the newest when fileID is 0),
-// checks it with the malware scanner, and puts each mod inside it into the
+// makes sure it is the file GameBanana lists, checks it with the malware
+// scanner, and puts each mod inside it into the
 // Mods folder, replacing an older copy of the same mod. force installs a
 // file GameBanana's virus scan hasn't passed; acceptRisk one wbmm's scanner
 // found CRITICAL things in (a *RiskError otherwise). It returns the names
@@ -400,10 +402,9 @@ func (m *Manager) InstallGB(gbID, fileID int, force, acceptRisk bool) ([]string,
 		return nil, err
 	}
 	defer os.RemoveAll(stage)
-	arc := filepath.Join(stage, "download")
-	sum, err := sources.Download(f.DownloadURL, arc, MaxDownload)
+	arc, sum, err := downloadGB(f)
 	if err != nil {
-		return nil, fmt.Errorf("downloading %s: %w", f.Name, err)
+		return nil, err
 	}
 	unpacked := filepath.Join(stage, "files")
 	if err := os.Mkdir(unpacked, 0o755); err != nil {
@@ -473,6 +474,9 @@ func (m *Manager) InstallGB(gbID, fileID int, force, acceptRisk bool) ([]string,
 		}
 		delete(st.Skipped, gbID)
 	})
+	if err == nil {
+		os.Remove(arc)
+	}
 	return names, err
 }
 

@@ -43,11 +43,12 @@ func run() error {
 	}
 	snap := popularity.Snapshot{Date: today, Counts: map[string]int{}}
 	items := map[string]popularity.Item{}
+	var gbFiles map[int]sources.GBStat
 	add := func(it popularity.Item) {
 		items[it.Ref] = it
 		snap.Counts[it.Ref] = it.N
 	}
-	if err := collectGB(add); err != nil {
+	if err := collectGB(add, &gbFiles); err != nil {
 		fmt.Fprintln(os.Stderr, "GameBanana:", err)
 	} else {
 		snap.Sources = append(snap.Sources, "gb")
@@ -74,11 +75,23 @@ func run() error {
 	sort.Slice(list, func(i, j int) bool { return list[i].Ref < list[j].Ref })
 	popularity.Compute(list, snaps)
 	ix := popularity.Index{Generated: now, Since: snaps[0].Date, Items: list}
+	if g, err := sources.LatestGameRelease(); err != nil {
+		fmt.Fprintln(os.Stderr, "game release:", err)
+	} else {
+		ix.Game = &popularity.Game{Version: g.Version, Released: g.Released}
+	}
+	if gbFiles != nil {
+		prov, err := provides(filepath.Join(*dir, "provides-cache.json"), gbFiles, items)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "provides:", err)
+		}
+		ix.Provides = prov
+	}
 	fmt.Fprintf(os.Stderr, "%d items, sources %v, history since %s\n", len(list), snap.Sources, ix.Since)
 	return writeJSON(filepath.Join(*dir, "popularity.json"), ix)
 }
 
-func collectGB(add func(popularity.Item)) error {
+func collectGB(add func(popularity.Item), files *map[int]sources.GBStat) error {
 	all, err := sources.GBAll()
 	if err != nil {
 		return err
@@ -90,10 +103,11 @@ func collectGB(add func(popularity.Item)) error {
 	for i, m := range all {
 		ids[i] = m.ID
 	}
-	dl, err := sources.GBDownloads(ids)
+	dl, err := sources.GBStats(ids)
 	if err != nil {
 		return err
 	}
+	*files = dl
 	for _, m := range all {
 		kind := "mod"
 		if m.IsMap() {
@@ -105,7 +119,7 @@ func collectGB(add func(popularity.Item)) error {
 		}
 		add(popularity.Item{Ref: fmt.Sprintf("gb:%d", m.ID), Src: "gb", Kind: kind, Name: m.Name,
 			Author: m.Submitter.Name, Image: m.Thumb(), Category: m.Category.Name, URL: m.URL,
-			Updated: upd, Likes: m.Likes, N: dl[m.ID]})
+			Updated: upd, Likes: m.Likes, N: dl[m.ID].Downloads})
 	}
 	return nil
 }

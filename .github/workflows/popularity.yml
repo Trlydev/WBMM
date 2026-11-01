@@ -4,6 +4,8 @@ name: popularity
 # for WorldBox, and publish what gained the most in the last day, week and
 # month (popularity.json on the popularity-data branch, read by wbmm). No
 # database and no secrets: the data is public and lives in this repository.
+# It also reads the mod.json files of new GameBanana uploads (never running
+# anything) to know which item installs each mod ID, for dependencies.
 # Snapshots older than 31 days are deleted and the branch is rewritten as a
 # single commit each run, so it never grows.
 on:
@@ -21,7 +23,7 @@ concurrency:
 jobs:
   index:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -45,6 +47,7 @@ jobs:
         run: |
           out=$(mktemp -d)
           cp -r data/snapshots data/popularity.json "$out"/
+          if [ -f data/provides-cache.json ]; then cp data/provides-cache.json "$out"/; fi
           cd "$out"
           git init -q -b popularity-data
           git config user.name "github-actions[bot]"

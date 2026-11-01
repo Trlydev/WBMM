@@ -1,8 +1,12 @@
 package sources
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -77,6 +81,39 @@ type GBFile struct {
 }
 
 func (f GBFile) AddedTime() time.Time { return time.Unix(f.Added, 0) }
+
+// FromGameBanana reports whether the file downloads from GameBanana itself
+// (https, gamebanana.com or one of its subdomains).
+func (f GBFile) FromGameBanana() bool {
+	u, err := url.Parse(f.DownloadURL)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "gamebanana.com" || strings.HasSuffix(h, ".gamebanana.com")
+}
+
+// Verify checks a downloaded copy against the MD5 checksum GameBanana
+// lists for the file: a download changed on the way, or swapped on the
+// server after GameBanana's virus scan, doesn't match.
+func (f GBFile) Verify(path string) error {
+	if f.MD5 == "" {
+		return nil // older files have none
+	}
+	fh, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, fh); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(got, f.MD5) {
+		return fmt.Errorf("%s isn't the file GameBanana lists (checksum %s, expected %s)", f.Name, got[:12], strings.ToLower(f.MD5)[:min(12, len(f.MD5))])
+	}
+	return nil
+}
 
 // Clean reports whether GameBanana's own malware analysis finished and passed.
 func (f GBFile) Clean() bool {
@@ -265,9 +302,15 @@ func GBAll() ([]GBMod, error) {
 	return all, nil
 }
 
-// GBDownloads returns the download counts of mods, 50 per request.
-func GBDownloads(ids []int) (map[int]int, error) {
-	out := map[int]int{}
+// GBStat is what GBStats returns for a mod.
+type GBStat struct {
+	Downloads int      `json:"_nDownloadCount"`
+	Files     []GBFile `json:"_aFiles"`
+}
+
+// GBStats returns the download counts and files of mods, 50 per request.
+func GBStats(ids []int) (map[int]GBStat, error) {
+	out := map[int]GBStat{}
 	for i := 0; i < len(ids); i += 50 {
 		batch := ids[i:min(i+50, len(ids))]
 		var csv []string
@@ -275,15 +318,15 @@ func GBDownloads(ids []int) (map[int]int, error) {
 			csv = append(csv, fmt.Sprint(id))
 		}
 		var rows []struct {
-			ID        int `json:"_idRow"`
-			Downloads int `json:"_nDownloadCount"`
+			ID int `json:"_idRow"`
+			GBStat
 		}
-		u := fmt.Sprintf("%s/Mod/Multi?_csvRowIds=%s&_csvProperties=_idRow,_nDownloadCount", gbAPI, strings.Join(csv, ","))
+		u := fmt.Sprintf("%s/Mod/Multi?_csvRowIds=%s&_csvProperties=_idRow,_nDownloadCount,_aFiles", gbAPI, strings.Join(csv, ","))
 		if err := getJSON(u, &rows); err != nil {
 			return out, err
 		}
 		for _, r := range rows {
-			out[r.ID] = r.Downloads
+			out[r.ID] = r.GBStat
 		}
 	}
 	return out, nil

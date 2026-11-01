@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -248,8 +249,23 @@ func (d *detailsView) paintActions() {
 	page := widget.NewButtonWithIcon("Open page", theme.ComputerIcon(), func() { u.openURL(c.URL) })
 	switch {
 	case c.Kind == "map":
-		d.actions.Add(mutedLabel("A world map from GameBanana. Download it from its page and load it from WorldBox's saves."))
-		d.actions.Add(container.NewHBox(page))
+		id := atoi(c.ID)
+		if recs := u.m.InstalledMaps()[id]; len(recs) > 0 {
+			var slots []string
+			for _, r := range recs {
+				slots = append(slots, filepath.Base(r.Slot))
+			}
+			rm := widget.NewButtonWithIcon("Remove", theme.DeleteIcon(), func() { u.removeMap(id, c.Name) })
+			u.bindOp(key, rm)
+			d.actions.Add(container.NewHBox(badge("installed", pal().grass), layout.NewSpacer(), rm, page))
+			d.actions.Add(mutedLabel("In save slot " + strings.Join(slots, ", ") + ". Load it from WorldBox's Saves."))
+		} else {
+			in := widget.NewButtonWithIcon("Install", theme.DownloadIcon(), func() { u.installMap(id, c.Name, false) })
+			in.Importance = widget.HighImportance
+			u.bindOp(key, in)
+			d.actions.Add(container.NewHBox(in, page))
+			d.actions.Add(mutedLabel("Copies the world into a free save slot (only its save files: maps hold no code). Load it from WorldBox's Saves."))
+		}
 	case c.Source == "workshop":
 		if u.m.Subscribed()[c.ID] {
 			off := widget.NewButtonWithIcon("Unsubscribe", theme.DeleteIcon(), func() { u.unsubscribe(c.ID, c.Name) })
@@ -260,12 +276,16 @@ func (d *detailsView) paintActions() {
 			} else {
 				d.actions.Add(mutedLabel("Steam keeps it updated; wbmm checks every update before the game loads it."))
 			}
+			d.addOutdated(d.wsUpdated())
 		} else {
 			sub := widget.NewButtonWithIcon("Subscribe", theme.DownloadIcon(), func() { u.subscribe(c.ID, c.Name) })
 			sub.Importance = widget.HighImportance
 			u.bindOp(key, sub)
 			d.actions.Add(container.NewHBox(sub, page))
-			d.actions.Add(mutedLabel("Subscribes through your Steam client (Steam needs to be running) and follows the download."))
+			d.actions.Add(mutedLabel("Subscribes through your Steam client (Steam needs to be running), follows the download and checks the mod before the game can load it."))
+			if c.Kind != "world" {
+				d.addOutdated(d.wsUpdated())
+			}
 		}
 	default:
 		have := u.m.InstalledGB()[atoi(c.ID)]
@@ -289,6 +309,12 @@ func (d *detailsView) paintActions() {
 		}
 		row.Add(page)
 		d.actions.Add(row)
+		if d.gb != nil && len(d.gb.Files) > 0 {
+			d.addOutdated(d.gb.Files[0].Added)
+			d.actions.Add(d.paintCheck(atoi(c.ID), d.gb.Files[0]))
+		} else {
+			d.addOutdated(c.Updated)
+		}
 	}
 	d.actions.Refresh()
 	d.paintFiles()
@@ -329,6 +355,26 @@ func (d *detailsView) paintFiles() {
 	}
 	d.files.Add(section2(fmt.Sprintf("Files (%d)", len(d.gb.Files)), list))
 	d.files.Refresh()
+}
+
+// addOutdated warns about a mod last updated (at t) before the current
+// WorldBox version.
+func (d *detailsView) addOutdated(t int64) {
+	if !d.u.outdated(t) {
+		return
+	}
+	l := label(d.u.outdatedNote())
+	l.Importance = widget.WarningImportance
+	l.Wrapping = fyne.TextWrapWord
+	d.actions.Add(l)
+}
+
+// wsUpdated is when the Workshop item's files last changed.
+func (d *detailsView) wsUpdated() int64 {
+	if d.ws != nil {
+		return d.ws.Updated
+	}
+	return d.card.Updated
 }
 
 func atoi64(s string) int64 {

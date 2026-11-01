@@ -245,9 +245,16 @@ func (v *myModsPage) paintPanel() {
 	}
 	if len(md.Needs) > 0 {
 		note("Needs "+strings.Join(md.Needs, ", ")+", which isn't installed. NeoModLoader won't load it without.", widget.WarningImportance)
+		needs, name := md.Needs, md.Name
+		get := widget.NewButtonWithIcon("Install what it needs", theme.DownloadIcon(), func() { u.installDeps(needs, name) })
+		get.Importance = widget.HighImportance
+		status.Add(container.NewHBox(get))
 	}
 	if len(md.Clashes) > 0 {
 		note("Doesn't work together with "+strings.Join(md.Clashes, ", ")+". Switch one of them off.", widget.WarningImportance)
+	}
+	if run := v.runResult(*md); !run.loaded && u.outdated(md.FileAdded) {
+		note(u.outdatedNote(), widget.WarningImportance)
 	}
 	verdict, current := u.m.Verdict(md.Folder)
 	safety := container.NewHBox()

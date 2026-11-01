@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -31,17 +32,32 @@ var (
 
 const maxReadSize = 100 << 20
 
-// fileIDs is what was found in one GameBanana file.
+// fileIDs is what was found in one GameBanana file. Err is kept only
+// for what trying again won't change (too big, not on GameBanana).
 type fileIDs struct {
 	Mod  int      `json:"mod"`
 	UIDs []string `json:"uids,omitempty"`
 	Err  string   `json:"err,omitempty"`
+	Kept bool     `json:"kept,omitempty"` // Err is final
 }
+
+// errFinal marks errors worth remembering.
+var errFinal = errors.New("final")
+
+type finalError struct{ msg string }
+
+func (e finalError) Error() string        { return e.msg }
+func (e finalError) Is(target error) bool { return target == errFinal }
 
 func provides(cachePath string, stats map[int]sources.GBStat, items map[string]popularity.Item) (map[string]string, error) {
 	cache := map[string]fileIDs{}
 	if b, err := os.ReadFile(cachePath); err == nil {
 		json.Unmarshal(b, &cache)
+	}
+	for k, e := range cache {
+		if e.Err != "" && !e.Kept {
+			delete(cache, k) // try again
+		}
 	}
 	// The newest file of each mod (maps hold no mod.json).
 	type job struct {
@@ -78,9 +94,17 @@ func provides(cachePath string, stats map[int]sources.GBStat, items map[string]p
 		}
 		read++
 		uids, err := readIDs(j.file)
+		if errors.Is(err, sources.ErrEmptyDownload) {
+			fmt.Fprintln(os.Stderr, "provides: GameBanana is sending empty files; the rest tomorrow")
+			break
+		}
+		if err != nil && !errors.Is(err, errFinal) {
+			fmt.Fprintf(os.Stderr, "provides: %s: %v\n", j.file.Name, err)
+			continue // not kept: tried again next run
+		}
 		e := fileIDs{Mod: j.mod, UIDs: uids}
 		if err != nil {
-			e.Err = err.Error()
+			e.Err, e.Kept = err.Error(), true
 		}
 		cache[strconv.Itoa(j.file.ID)] = e
 	}
@@ -111,10 +135,10 @@ func provides(cachePath string, stats map[int]sources.GBStat, items map[string]p
 // readIDs downloads a GameBanana file and returns the IDs of the mods in it.
 func readIDs(f sources.GBFile) ([]string, error) {
 	if f.Size > maxReadSize {
-		return nil, fmt.Errorf("too big to read")
+		return nil, finalError{"too big to read"}
 	}
 	if !f.FromGameBanana() {
-		return nil, fmt.Errorf("not hosted on GameBanana")
+		return nil, finalError{"not hosted on GameBanana"}
 	}
 	tmp, err := os.MkdirTemp("", "popindex-")
 	if err != nil {
@@ -141,6 +165,6 @@ func readIDs(f sources.GBFile) ([]string, error) {
 			uids = append(uids, d.UID())
 		}
 	}
-	time.Sleep(300 * time.Millisecond) // gently
+	time.Sleep(time.Second) // gently
 	return uids, nil
 }

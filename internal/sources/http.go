@@ -158,6 +158,10 @@ func getText(u string, max int64) (string, error) {
 	return string(b), err
 }
 
+// ErrEmptyDownload: the server answered with nothing (GameBanana does
+// this when it's busy or limiting how much one address downloads).
+var ErrEmptyDownload = errors.New("the server sent an empty file (it may be busy): try again in a few minutes")
+
 // Download saves url to path and returns its SHA-256 hex digest. Files
 // larger than maxBytes are refused.
 func Download(u, path string, maxBytes int64) (sha256hex string, err error) {
@@ -192,6 +196,9 @@ func Download(u, path string, maxBytes int64) (sha256hex string, err error) {
 	}
 	if err == nil && n > maxBytes {
 		err = fmt.Errorf("download is larger than %d MB", maxBytes>>20)
+	}
+	if err == nil && n == 0 {
+		err = ErrEmptyDownload
 	}
 	if err != nil {
 		os.Remove(path)

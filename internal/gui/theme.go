@@ -216,50 +216,6 @@ func (l *widthLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 	objs[0].Move(fyne.NewPos((size.Width-w)/2, 0))
 }
 
-// gridLayout lays cards out in as many columns of at least minW as fit,
-// stretching them to fill the row; rows are as tall as their tallest card.
-type gridLayout struct{ minW, gap float32 }
-
-func (g *gridLayout) cols(w float32) int {
-	n := int((w + g.gap) / (g.minW + g.gap))
-	return max(n, 1)
-}
-
-func (g *gridLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
-	return fyne.NewSize(g.minW, g.height(objs, g.minW))
-}
-
-func (g *gridLayout) height(objs []fyne.CanvasObject, w float32) float32 {
-	n := g.cols(w)
-	var h float32
-	for i := 0; i < len(objs); i += n {
-		var row float32
-		for _, o := range objs[i:min(i+n, len(objs))] {
-			row = max(row, o.MinSize().Height)
-		}
-		h += row + g.gap
-	}
-	return max(h-g.gap, 0)
-}
-
-func (g *gridLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
-	n := g.cols(size.Width)
-	cw := (size.Width - g.gap*float32(n-1)) / float32(n)
-	var y float32
-	for i := 0; i < len(objs); i += n {
-		row := objs[i:min(i+n, len(objs))]
-		var rh float32
-		for _, o := range row {
-			rh = max(rh, o.MinSize().Height)
-		}
-		for j, o := range row {
-			o.Resize(fyne.NewSize(cw, rh))
-			o.Move(fyne.NewPos(float32(j)*(cw+g.gap), y))
-		}
-		y += rh + g.gap
-	}
-}
-
 // tappable makes any content clickable, with a pointer cursor.
 type tappable struct {
 	widget.BaseWidget

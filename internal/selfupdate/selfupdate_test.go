@@ -5,7 +5,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +71,29 @@ func TestReleaseKeyMatches(t *testing.T) {
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(k.(ed25519.PrivateKey), sums))
 	if err := verifySums(sums, sig); err != nil {
 		t.Fatal("the built-in public key doesn't match the release key")
+	}
+}
+
+// A signed checksum file is only good for the version it names.
+func TestSignedVersion(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	old := publicKey
+	publicKey = pub
+	defer func() { publicKey = old }()
+	sums := "abc  wbmm-linux-amd64\n# wbmm v0.2.1\n"
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(sums)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sig") {
+			w.Write([]byte(sig))
+			return
+		}
+		w.Write([]byte(sums))
+	}))
+	defer srv.Close()
+	if got, err := expectedSum(srv.URL+"/s", srv.URL+"/s.sig", "wbmm-linux-amd64", "v0.2.1"); err != nil || got != "abc" {
+		t.Errorf("right version: %q, %v", got, err)
+	}
+	if _, err := expectedSum(srv.URL+"/s", srv.URL+"/s.sig", "wbmm-linux-amd64", "v9.9.9"); err == nil {
+		t.Error("an old signed release was accepted as v9.9.9")
 	}
 }

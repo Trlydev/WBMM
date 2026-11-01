@@ -66,25 +66,6 @@ func ruleTitle(rule string) string {
 	return rule
 }
 
-// safetyBadge is the Installed list's mark for a mod's last check.
-func (u *ui) safetyBadge(md manager.Mod) fyne.CanvasObject {
-	p := pal()
-	v, current := u.m.Verdict(md.Folder)
-	switch {
-	case v == nil || !current:
-		return badge("checking…", p.muted)
-	case v.Blocked():
-		b := widget.NewButton("Held: review", func() { u.review(md, v) })
-		b.Importance = widget.DangerImportance
-		return b
-	case v.Accepted:
-		return newTappable(badge("allowed by you", p.sand), func() { u.showFindings(md.Name, v.Findings) }, nil)
-	case v.Max >= scan.High:
-		return newTappable(badge("worth a look", p.sand), func() { u.showFindings(md.Name, v.Findings) }, nil)
-	}
-	return badge("checked", p.grass)
-}
-
 // findingsList shows the HIGH and CRITICAL findings, grouped by meaning.
 func findingsList(findings []scan.Finding) fyne.CanvasObject {
 	box := container.NewVBox()
@@ -136,7 +117,7 @@ func (u *ui) review(md manager.Mod, v *manager.Verdict) {
 			return
 		}
 		u.say("Allowed %s. If its files change, it is checked again.", md.Name)
-		u.inst.reload()
+		u.mine.reload()
 	}, u.w)
 	d.Show()
 }
@@ -159,5 +140,5 @@ func heldMessage(held []manager.Mod) string {
 	for _, md := range held {
 		names = append(names, md.Name)
 	}
-	return "The safety check switched off " + strings.Join(names, ", ") + ". Review under Installed."
+	return "The safety check switched off " + strings.Join(names, ", ") + ". Review it in My mods."
 }

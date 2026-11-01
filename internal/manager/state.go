@@ -2,6 +2,7 @@ package manager
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,6 +34,9 @@ type Record struct {
 type state struct {
 	Config  Config            `json:"config"`
 	Records map[string]Record `json:"records"` // by UID
+	// Skipped: GameBanana files (by mod ID) an automatic update couldn't
+	// install; it doesn't retry them (the Update button still offers them).
+	Skipped map[int]int `json:"skipped,omitempty"`
 	// Verdicts of the malware scanner, by mod folder.
 	Verdicts map[string]Verdict `json:"verdicts,omitempty"`
 }
@@ -47,13 +51,27 @@ func ConfigDir() (string, error) {
 	return d, os.MkdirAll(d, 0o755)
 }
 
-func loadState() (*state, error) {
-	s := &state{Records: map[string]Record{}, Verdicts: map[string]Verdict{}}
+func newState() *state {
+	return &state{Records: map[string]Record{}, Verdicts: map[string]Verdict{}, Skipped: map[int]int{}}
+}
+
+func statePath() (string, error) {
 	d, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "state.json"), nil
+}
+
+// loadState reads state.json. A file that can't be read as JSON is moved
+// aside (state.json.bad-<time>) rather than overwritten by the next save.
+func loadState() (*state, error) {
+	s := newState()
+	p, err := statePath()
 	if err != nil {
 		return s, err
 	}
-	b, err := os.ReadFile(filepath.Join(d, "state.json"))
+	b, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return s, nil
 	}
@@ -61,7 +79,9 @@ func loadState() (*state, error) {
 		return s, err
 	}
 	if err := json.Unmarshal(b, s); err != nil {
-		return s, err
+		bad := fmt.Sprintf("%s.bad-%d", p, time.Now().Unix())
+		os.Rename(p, bad)
+		return newState(), fmt.Errorf("state.json was damaged; kept it as %s and started over", filepath.Base(bad))
 	}
 	if s.Records == nil {
 		s.Records = map[string]Record{}
@@ -69,11 +89,14 @@ func loadState() (*state, error) {
 	if s.Verdicts == nil {
 		s.Verdicts = map[string]Verdict{}
 	}
+	if s.Skipped == nil {
+		s.Skipped = map[int]int{}
+	}
 	return s, nil
 }
 
 func (s *state) save() error {
-	d, err := ConfigDir()
+	p, err := statePath()
 	if err != nil {
 		return err
 	}
@@ -81,9 +104,40 @@ func (s *state) save() error {
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(d, "state.json")
-	if err := os.WriteFile(p+".tmp", b, 0o600); err != nil {
+	// A temporary file of its own, so two writers never share one.
+	f, err := os.CreateTemp(filepath.Dir(p), "state-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(p+".tmp", p)
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(f.Name(), 0o600)
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), p)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
+}
+
+// update changes the state as it is on disk, under a lock shared with
+// other wbmm processes (the window and a command run beside it), so neither
+// undoes the other's changes.
+func (m *Manager) update(fn func(st *state)) error {
+	lk, err := LockState(15 * time.Second)
+	if err != nil {
+		return err
+	}
+	defer lk.Unlock()
+	fresh, _ := loadState()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.st = fresh
+	fn(fresh)
+	return fresh.save()
 }

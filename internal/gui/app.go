@@ -1,6 +1,7 @@
-// Package gui is wbmm's window: a native Fyne app with a header of tabs
-// (Browse, Installed, Setup), banners for things that need the person, and
-// an activity bar along the bottom for downloads and messages.
+// Package gui is wbmm's window: a native Fyne app laid out like a mod
+// manager. A sidebar (Play, My mods, Get mods, Worlds, Settings), a list in
+// the middle, the selected item's details on the right, and a status bar
+// for downloads and messages.
 package gui
 
 import (
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -38,14 +40,12 @@ type ui struct {
 	m       *manager.Manager
 	version string
 
-	tabBtns  []*widget.Button
-	views    []fyne.CanvasObject
-	body     *fyne.Container
-	current  int
-	banners  *fyne.Container
-	nmlChip  *fyne.Container
-	runChip  fyne.CanvasObject
-	countTxt *canvas.Text
+	nav     []*navItem
+	pages   []fyne.CanvasObject
+	current int
+	notices *fyne.Container
+	nmlLine *widget.Label
+	runLine *widget.Label
 
 	actText  *widget.Label
 	actBar   *widget.ProgressBar
@@ -62,10 +62,19 @@ type ui struct {
 	ops       map[string]*op
 	opButtons map[string][]*widget.Button
 
-	br   *browseView
-	inst *installedView
-	set  *setupView
+	mine   *myModsPage
+	get    *getModsPage
+	worlds *worldsPage
+	set    *settingsPage
 }
+
+// Pages, in sidebar order.
+const (
+	pageMine = iota
+	pageGet
+	pageWorlds
+	pageSettings
+)
 
 // Run opens the window and returns when it's closed.
 func Run(m *manager.Manager, version string) error {
@@ -79,7 +88,7 @@ func Run(m *manager.Manager, version string) error {
 	a.SetIcon(fyne.NewStaticResource("wbmm.png", desktop.IconPNG()))
 	u := &ui{a: a, m: m, version: version}
 	u.w = a.NewWindow("WorldBox Mod Manager")
-	u.w.Resize(fyne.NewSize(1200, 820))
+	u.w.Resize(fyne.NewSize(1240, 800))
 	u.build()
 	stop := listenForOthers(func() {
 		fyne.Do(func() {
@@ -94,102 +103,130 @@ func Run(m *manager.Manager, version string) error {
 }
 
 func (u *ui) build() {
-	u.br = newBrowseView(u)
-	u.inst = newInstalledView(u)
-	u.set = newSetupView(u)
-	u.views = []fyne.CanvasObject{u.br.root, u.inst.root, u.set.root}
-	u.body = container.NewStack(u.views...)
+	u.mine = newMyModsPage(u)
+	u.get = newGetModsPage(u)
+	u.worlds = newWorldsPage(u)
+	u.set = newSettingsPage(u)
+	u.pages = []fyne.CanvasObject{u.mine.root, u.get.root, u.worlds.root, u.set.root}
 
-	u.banners = container.NewVBox()
+	u.notices = container.NewVBox()
 	u.actText = widget.NewLabel("")
 	u.actText.Truncation = fyne.TextTruncateEllipsis
 	u.actBar = widget.NewProgressBar()
 	u.actBar.Hide()
-	actBg := canvas.NewRectangle(pal().surface)
-	activity := container.NewStack(actBg, container.New(layout.NewCustomPaddedLayout(2, 2, 14, 14),
-		container.NewBorder(nil, nil, nil, fixedSize(u.actBar, 240, 22), u.actText)))
-	topLine := canvas.NewRectangle(pal().border)
-	topLine.SetMinSize(fyne.NewSize(1, 1))
+	statusBg := canvas.NewRectangle(pal().surface)
+	status := container.NewStack(statusBg, container.New(layout.NewCustomPaddedLayout(0, 0, 12, 12),
+		container.NewBorder(nil, nil, nil, fixedSize(u.actBar, 220, 20), u.actText)))
+	statusLine := canvas.NewRectangle(pal().border)
+	statusLine.SetMinSize(fyne.NewSize(1, 1))
 
-	main := container.NewBorder(
-		container.NewVBox(u.header(), container.New(layout.NewCustomPaddedLayout(0, 0, 16, 16), u.banners)),
-		container.NewVBox(topLine, activity),
-		nil, nil,
-		container.New(layout.NewCustomPaddedLayout(10, 0, 16, 16), u.body),
-	)
+	content := container.NewBorder(u.notices, nil, nil, nil, container.NewStack(u.pages...))
+	main := container.NewBorder(nil, container.NewVBox(statusLine, status), u.sidebar(), nil,
+		container.New(layout.NewCustomPaddedLayout(12, 4, 16, 16), content))
 	u.w.SetContent(main)
-	u.show(0)
-	u.say("Welcome! Loading mods…")
+	u.show(pageMine)
+	u.say("Loading your mods…")
 }
 
-// header is the band across the top: a sky-to-sea gradient with the name,
-// the tabs and status chips.
-func (u *ui) header() fyne.CanvasObject {
+// sidebar: the name, Play, the pages, and the game's status at the bottom.
+func (u *ui) sidebar() fyne.CanvasObject {
 	p := pal()
-	grad := canvas.NewHorizontalGradient(p.headerFrom, p.headerTo)
 	icon := canvas.NewImageFromResource(fyne.NewStaticResource("wbmm.png", desktop.IconPNG()))
 	icon.FillMode = canvas.ImageFillContain
-	name := text("WorldBox Mod Manager", p.headerText, sTitle, true)
-	sub := text("GameBanana · Steam Workshop · NeoModLoader", p.headerMuted, sSmall, false)
-	brand := container.NewHBox(fixedSize(icon, 34, 34), container.NewVBox(layout.NewSpacer(), name, sub, layout.NewSpacer()))
+	brand := container.NewHBox(fixedSize(icon, 30, 30),
+		container.NewVBox(layout.NewSpacer(), text("WorldBox", p.text, sTitle, true), text("Mod Manager", p.muted, sSmall, false), layout.NewSpacer()))
 
-	names := []string{"Browse", "Installed", "Setup"}
-	tabs := container.NewHBox()
-	for i, n := range names {
-		i := i
-		b := widget.NewButton(n, func() { u.show(i) })
-		u.tabBtns = append(u.tabBtns, b)
-		tabs.Add(b)
-	}
-	u.countTxt = text("", p.headerText, sSmall, true)
-	u.nmlChip = container.NewStack()
-	u.runChip = badge("WorldBox is running", p.sand)
-	u.runChip.Hide()
-	chips := container.NewHBox(u.runChip, u.nmlChip)
 	play := widget.NewButtonWithIcon("Play WorldBox", theme.MediaPlayIcon(), u.play)
 	play.Importance = widget.HighImportance
 
-	row := container.NewBorder(nil, nil,
-		container.NewHBox(brand, widget.NewSeparator(), tabs, u.countTxt),
-		container.NewHBox(container.NewVBox(layout.NewSpacer(), chips, layout.NewSpacer()), play))
-	return container.NewStack(grad, container.New(layout.NewCustomPaddedLayout(10, 10, 16, 16), row))
+	items := []struct {
+		icon fyne.Resource
+		name string
+	}{
+		{theme.ListIcon(), "My mods"},
+		{theme.DownloadIcon(), "Get mods"},
+		{theme.HomeIcon(), "Worlds"},
+		{theme.SettingsIcon(), "Settings"},
+	}
+	navBox := container.NewVBox()
+	for i, it := range items {
+		i := i
+		n := newNavItem(it.icon, it.name, func() { u.show(i) })
+		u.nav = append(u.nav, n)
+		navBox.Add(n)
+	}
+
+	u.nmlLine = line("NeoModLoader …", false, sSmall, widget.LowImportance)
+	u.runLine = line("WorldBox is running", true, sSmall, widget.WarningImportance)
+	u.runLine.Hide()
+	foot := container.NewVBox(widget.NewSeparator(), u.runLine, u.nmlLine,
+		line("wbmm "+u.version, false, sSmall, widget.LowImportance))
+
+	bg := canvas.NewRectangle(p.surface)
+	edge := canvas.NewRectangle(p.border)
+	edge.SetMinSize(fyne.NewSize(1, 1))
+	col := container.NewBorder(
+		container.NewVBox(brand, layout.NewSpacer(), play, widget.NewSeparator()),
+		foot, nil, nil, navBox)
+	return container.NewBorder(nil, nil, nil, edge,
+		container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(14, 10, 12, 12), fixedWidth(col, 196))))
+}
+
+// fixedWidth gives an object a fixed width and lets its height stretch.
+func fixedWidth(o fyne.CanvasObject, w float32) fyne.CanvasObject {
+	return container.New(&fixedWidthLayout{w}, o)
+}
+
+type fixedWidthLayout struct{ w float32 }
+
+func (l *fixedWidthLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(l.w, objs[0].MinSize().Height)
+}
+func (l *fixedWidthLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	objs[0].Resize(fyne.NewSize(l.w, size.Height))
+	objs[0].Move(fyne.NewPos(0, 0))
 }
 
 func (u *ui) show(i int) {
 	u.current = i
-	for j, v := range u.views {
+	for j, pg := range u.pages {
 		if j == i {
-			v.Show()
+			pg.Show()
 		} else {
-			v.Hide()
+			pg.Hide()
 		}
 	}
-	for j, b := range u.tabBtns {
-		if j == i {
-			b.Importance = widget.HighImportance
-		} else {
-			b.Importance = widget.LowImportance
-		}
-		b.Refresh()
+	for j, n := range u.nav {
+		n.setActive(j == i)
 	}
 	switch i {
-	case 1:
-		u.inst.reload()
-	case 2:
+	case pageMine:
+		u.mine.reload()
+	case pageWorlds:
+		u.worlds.reload()
+	case pageSettings:
 		u.set.refresh()
 	}
 }
 
-// ---------- activity bar ----------
+// refreshViews redraws everything that shows mods (after an install, a
+// subscription, a removal).
+func (u *ui) refreshViews() {
+	u.get.repaint()
+	u.mine.reload()
+	u.worlds.reload()
+}
 
-// say shows a message in the activity bar.
+// ---------- status bar ----------
+
+// say shows a message in the status bar.
 func (u *ui) say(format string, a ...any) {
 	u.actText.Importance = widget.MediumImportance
 	u.actText.SetText(fmt.Sprintf(format, a...))
 	u.actUntil = time.Now().Add(8 * time.Second)
 }
 
-// fail shows an error in the activity bar and logs it.
+// fail shows an error in the status bar and logs it.
 func (u *ui) fail(err error) {
 	log.Print(err)
 	u.actText.Importance = widget.DangerImportance
@@ -197,7 +234,7 @@ func (u *ui) fail(err error) {
 	u.actUntil = time.Now().Add(15 * time.Second)
 }
 
-// progress shows (or with frac < 0, hides) the activity bar's progress.
+// progress shows (or with frac < 0, hides) the status bar's progress.
 func (u *ui) progress(frac float64) {
 	if frac < 0 {
 		u.actBar.Hide()
@@ -207,24 +244,24 @@ func (u *ui) progress(frac float64) {
 	u.actBar.Show()
 }
 
-// idle is the activity bar when nothing is happening.
+// idle is the status bar when nothing is happening.
 func (u *ui) idle() {
 	if time.Now().Before(u.actUntil) || u.actBar.Visible() {
 		return
 	}
 	u.actText.Importance = widget.LowImportance
-	n := len(u.inst.mods)
+	n := len(u.mine.mods)
 	switch {
 	case u.gameErr != nil:
-		u.actText.SetText("WorldBox not found. Set its folder in Setup.")
+		u.actText.SetText("WorldBox not found. Set its folder in Settings.")
 	case n == 1:
-		u.actText.SetText("Ready · 1 mod installed")
+		u.actText.SetText("Ready · 1 mod")
 	default:
-		u.actText.SetText(fmt.Sprintf("Ready · %d mods installed", n))
+		u.actText.SetText(fmt.Sprintf("Ready · %d mods", n))
 	}
 }
 
-// ---------- status, banners ----------
+// ---------- status, notices ----------
 
 // refreshStatus re-reads the game folder, whether the game runs and (with
 // loader) NeoModLoader's status, then redraws what depends on them.
@@ -239,63 +276,72 @@ func (u *ui) refreshStatus(loader bool) {
 		}
 	}
 	fyne.Do(func() {
+		changed := running != u.running
 		u.gameDir, u.gameErr, u.running = gd, gerr, running
 		if ls != nil {
 			u.loader = ls
 		}
 		u.paintStatus()
+		if changed {
+			u.mine.paint()
+		}
 	})
 }
 
 func (u *ui) paintStatus() {
-	p := pal()
 	if u.running {
-		u.runChip.Show()
+		u.runLine.Show()
 	} else {
-		u.runChip.Hide()
+		u.runLine.Hide()
 	}
-	var chip fyne.CanvasObject
-	switch {
-	case u.loader == nil:
-		chip = badge("NeoModLoader …", p.headerMuted)
-	case !u.loader.Installed:
-		chip = badge("NeoModLoader missing", p.bad)
-	case !u.loader.UpToDate && u.loader.CheckError == "":
-		chip = badge("NeoModLoader update", p.sand)
+	switch l := u.loader; {
+	case l == nil:
+		u.nmlLine.SetText("NeoModLoader …")
+		u.nmlLine.Importance = widget.LowImportance
+	case !l.Installed:
+		u.nmlLine.SetText("NeoModLoader missing")
+		u.nmlLine.Importance = widget.DangerImportance
+	case !l.UpToDate && l.CheckError == "":
+		u.nmlLine.SetText("NeoModLoader update")
+		u.nmlLine.Importance = widget.WarningImportance
 	default:
-		chip = badge("NeoModLoader ready", p.headerText)
+		u.nmlLine.SetText("NeoModLoader ready")
+		u.nmlLine.Importance = widget.SuccessImportance
 	}
-	u.nmlChip.Objects = []fyne.CanvasObject{chip}
-	u.nmlChip.Refresh()
-	u.paintBanners()
+	u.nmlLine.Refresh()
+	u.paintNotices()
 	u.set.refresh()
 }
 
-func (u *ui) paintBanners() {
+// paintNotices shows the few things that need the person, slim, above the
+// page.
+func (u *ui) paintNotices() {
 	p := pal()
 	var bs []fyne.CanvasObject
 	add := func(msg string, c color.NRGBA, buttons ...fyne.CanvasObject) {
-		row := container.NewBorder(nil, nil, nil, container.NewHBox(buttons...), label(msg))
-		bs = append(bs, tint(row, withAlpha(c, 0x30)))
+		l := widget.NewLabel(msg)
+		l.Wrapping = fyne.TextWrapWord
+		row := container.NewBorder(nil, nil, nil, container.NewHBox(buttons...), l)
+		bs = append(bs, container.New(layout.NewCustomPaddedLayout(0, 8, 0, 0), tint(row, withAlpha(c, 0x2c))))
 	}
 	if u.restartTo != "" {
 		add(fmt.Sprintf("wbmm %s is installed. Restart to use it.", u.restartTo), p.grass,
-			widget.NewButton("Restart now", u.restart))
+			widget.NewButton("Restart", u.restart))
 	}
 	if u.gameErr != nil {
-		add(u.gameErr.Error(), p.warn, widget.NewButton("Open Setup", func() { u.show(2) }))
+		add(u.gameErr.Error(), p.warn, widget.NewButton("Settings", func() { u.show(pageSettings) }))
 	} else if u.loader != nil && !u.loader.Installed {
 		add("NeoModLoader isn't installed. WorldBox mods need it to load.", p.warn,
-			widget.NewButton("Install NeoModLoader", u.installLoader))
+			widget.NewButton("Install it", u.installLoader))
 	}
 	if !u.hideInstall && !desktop.IsInstalled() && u.version != "dev" {
 		install := widget.NewButton("Install", u.installApp)
 		install.Importance = widget.HighImportance
-		add("Install WorldBox Mod Manager as an app: a menu entry, a desktop shortcut, and updates in place.", p.sea,
-			install, widget.NewButton("Not now", func() { u.hideInstall = true; u.paintBanners() }))
+		add("Install WorldBox Mod Manager as an app: a menu entry, a shortcut, and updates in place.", p.sea,
+			install, widget.NewButton("Not now", func() { u.hideInstall = true; u.paintNotices() }))
 	}
-	u.banners.Objects = bs
-	u.banners.Refresh()
+	u.notices.Objects = bs
+	u.notices.Refresh()
 }
 
 // play starts WorldBox through Steam, after a look at what would stop
@@ -323,7 +369,7 @@ func (u *ui) play() {
 		return
 	}
 	held := 0
-	for _, md := range u.inst.mods {
+	for _, md := range u.mine.mods {
 		if v, current := u.m.Verdict(md.Folder); current && v.Blocked() {
 			held++
 		}
@@ -360,7 +406,7 @@ func (u *ui) installApp() {
 				return
 			}
 			u.hideInstall = true
-			u.paintBanners()
+			u.paintNotices()
 			u.say("Installed. Starting the installed copy…")
 		})
 		if err == nil {
@@ -389,7 +435,7 @@ func (u *ui) restart() {
 func (u *ui) background() {
 	go pruneImageCache()
 	u.refreshStatus(true)
-	fyne.Do(func() { u.inst.reload() })
+	fyne.Do(func() { u.mine.reload() })
 	time.Sleep(3 * time.Second)
 	var lastApp, lastMods, lastCheck time.Time
 	tick := time.NewTicker(10 * time.Second)
@@ -405,7 +451,7 @@ func (u *ui) background() {
 				if len(held) > 0 {
 					u.fail(errors.New(heldMessage(held)))
 				}
-				u.inst.paint()
+				u.mine.paint()
 			})
 			if err != nil {
 				log.Printf("safety check: %v", err)
@@ -455,7 +501,7 @@ func (u *ui) selfUpdate(force bool) {
 	}
 	fyne.Do(func() {
 		u.restartTo = rel.Version
-		u.paintBanners()
+		u.paintNotices()
 		u.say("wbmm %s is installed. Restart to use it.", rel.Version)
 	})
 }
@@ -466,7 +512,7 @@ func (u *ui) autoUpdateMods() {
 		switch {
 		case len(updated) > 0:
 			u.say("Updated %s.", strings.Join(updated, ", "))
-			u.inst.reload()
+			u.mine.reload()
 		case len(held) > 0:
 			u.say("Updates waiting for you under Installed: %s", strings.Join(held, ", "))
 		}
@@ -478,9 +524,15 @@ func (u *ui) autoUpdateMods() {
 
 // ---------- opening things ----------
 
+// reSteamLink matches the only steam:// links wbmm opens: starting
+// WorldBox and showing a Workshop item. Links from mods and listings must
+// be https (a steam:// link can start other games with arguments).
+var reSteamLink = regexp.MustCompile(`^steam://(rungameid/1206560|url/CommunityFilePage/[0-9]{6,20})$`)
+
 func (u *ui) openURL(link string) {
 	p, err := url.Parse(link)
-	if err != nil || (p.Scheme != "https" && p.Scheme != "steam") {
+	if err != nil || !(p.Scheme == "https" || p.Scheme == "steam" && reSteamLink.MatchString(link)) {
+		u.fail(fmt.Errorf("not opening %q: only https web pages", link))
 		return
 	}
 	if err := u.a.OpenURL(p); err != nil {

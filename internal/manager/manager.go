@@ -113,15 +113,14 @@ func (m *Manager) game() (string, error) {
 // SetGameDir saves the game folder ("" goes back to finding it through
 // Steam).
 func (m *Manager) SetGameDir(dir string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	dir = strings.TrimSpace(dir)
 	if dir != "" && !game.IsGameDir(dir) {
 		return errors.New("that folder doesn't look like a WorldBox install (no worldbox_Data inside)")
 	}
-	m.st.Config.GameDir = dir
-	m.findGame()
-	return m.st.save()
+	return m.update(func(st *state) {
+		st.Config.GameDir = dir
+		m.findGame()
+	})
 }
 
 func (m *Manager) Config() Config {
@@ -132,10 +131,9 @@ func (m *Manager) Config() Config {
 
 // SetUpdates saves the automatic update settings.
 func (m *Manager) SetUpdates(mods, app bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.st.Config.NoModUpdates, m.st.Config.NoAppUpdates = !mods, !app
-	return m.st.save()
+	return m.update(func(st *state) {
+		st.Config.NoModUpdates, st.Config.NoAppUpdates = !mods, !app
+	})
 }
 
 // List returns every mod NML will find: local mods first (NML loads them
@@ -189,6 +187,18 @@ func (m *Manager) List() ([]Mod, error) {
 		}
 		out = append(out, md)
 	}
+	// NML also loads mod folders from the game's own mods folder.
+	for _, e := range readDirs(game.NativeModsDir(gd)) {
+		if e == "NML" {
+			continue
+		}
+		md, ok := add(filepath.Join(game.NativeModsDir(gd), e))
+		if !ok {
+			continue
+		}
+		md.Source = "native"
+		out = append(out, md)
+	}
 	for _, e := range readDirs(game.WorkshopDir(gd)) {
 		md, ok := add(filepath.Join(game.WorkshopDir(gd), e))
 		if !ok {
@@ -205,10 +215,14 @@ func (m *Manager) List() ([]Mod, error) {
 // checkDependencies fills in what each switched-on mod needs and clashes
 // with, the way NML resolves them: by UID, among mods that will load.
 func checkDependencies(mods []Mod) {
-	on := map[string]string{} // UID -> name
+	installed := map[string]bool{} // NML switches on what an enabled mod needs
+	on := map[string]string{}      // UID -> name
 	for _, md := range mods {
-		if md.Enabled && md.Problem == "" {
-			on[md.UID] = md.Name
+		if md.Problem == "" {
+			installed[md.UID] = true
+			if md.Enabled {
+				on[md.UID] = md.Name
+			}
 		}
 	}
 	for i := range mods {
@@ -217,12 +231,12 @@ func checkDependencies(mods []Mod) {
 			continue
 		}
 		for _, d := range md.deps {
-			if uid := nml.Symbol(strings.TrimSpace(d)); uid != "" && on[uid] == "" {
-				md.Needs = append(md.Needs, strings.TrimSpace(d))
+			if uid := nml.Symbol(d); uid != "" && !installed[uid] {
+				md.Needs = append(md.Needs, d)
 			}
 		}
 		for _, d := range md.incompatible {
-			if name := on[nml.Symbol(strings.TrimSpace(d))]; name != "" {
+			if name := on[nml.Symbol(d)]; name != "" {
 				md.Clashes = append(md.Clashes, name)
 			}
 		}
@@ -289,7 +303,13 @@ func (m *Manager) SetEnabled(uid string, enabled bool) error {
 	}
 	if enabled {
 		if md, err := m.Find(uid); err == nil {
-			if v, current := m.Verdict(md.Folder); current && v.Blocked() {
+			// Check its current files first (a changed mod's old verdict
+			// says nothing about what would run now).
+			v, _, err := m.check(md)
+			if err != nil {
+				return fmt.Errorf("couldn't check %s: %w", md.Name, err)
+			}
+			if v.Blocked() {
 				return fmt.Errorf("the safety check is holding %s: review it first", md.Name)
 			}
 		}
@@ -311,9 +331,7 @@ func (m *Manager) Remove(uid string) error {
 	if md.Source == "workshop" {
 		return errors.New("Workshop mods are removed by unsubscribing in Steam")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	gd, err := m.game()
+	gd, err := m.GameDir()
 	if err != nil {
 		return err
 	}
@@ -323,8 +341,10 @@ func (m *Manager) Remove(uid string) error {
 	if err := os.RemoveAll(md.Folder); err != nil {
 		return err
 	}
-	delete(m.st.Records, uid)
-	return m.st.save()
+	return m.update(func(st *state) {
+		delete(st.Records, uid)
+		delete(st.Verdicts, md.Folder)
+	})
 }
 
 // PickFile returns the file to install: fileID, or the newest when 0.
@@ -401,35 +421,59 @@ func (m *Manager) InstallGB(gbID, fileID int, force, acceptRisk bool) ([]string,
 		return nil, &RiskError{Name: mod.Name, Findings: verdict.Findings}
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	modsDir := game.ModsDir(gd)
 	if err := os.MkdirAll(modsDir, 0o755); err != nil {
 		return nil, err
 	}
 	var names []string
+	recs := map[string]Record{}
+	verdicts := map[string]Verdict{}
 	for _, root := range roots {
 		d, err := nml.ReadDeclare(filepath.Join(root, nml.DeclFile))
 		if err != nil {
 			return names, fmt.Errorf("%s: mod.json can't be read: %w", f.Name, err)
 		}
 		uid := d.UID()
+		m.mu.Lock()
 		folder := m.folderFor(modsDir, uid)
+		m.mu.Unlock()
 		dst := filepath.Join(modsDir, folder)
 		if err := replaceDir(root, dst); err != nil {
 			return names, err
 		}
 		v := verdict
 		v.Fingerprint, v.Accepted = fingerprint(dst), verdict.Blocked()
-		m.st.Verdicts[dst] = v
-		m.st.Records[uid] = Record{
+		verdicts[dst] = v
+		recs[uid] = Record{
 			UID: uid, Folder: folder, Name: d.Name, GBID: gbID,
 			FileID: f.ID, FileName: f.Name, FileAdded: f.Added, SHA256: sum,
 			Installed: time.Now(),
 		}
 		names = append(names, d.Name)
 	}
-	return names, m.st.save()
+	err = m.update(func(st *state) {
+		// Mods an older file of this GameBanana item installed that this
+		// file no longer has (renamed, or dropped) go, or NML would load
+		// both and the update would be offered for ever.
+		for uid, r := range st.Records {
+			if _, kept := recs[uid]; r.GBID == gbID && !kept {
+				old := filepath.Join(modsDir, r.Folder)
+				if r.Folder != "" && filepath.Dir(old) == modsDir {
+					os.RemoveAll(old)
+				}
+				delete(st.Records, uid)
+				delete(st.Verdicts, old)
+			}
+		}
+		for uid, r := range recs {
+			st.Records[uid] = r
+		}
+		for k, v := range verdicts {
+			st.Verdicts[k] = v
+		}
+		delete(st.Skipped, gbID)
+	})
+	return names, err
 }
 
 // folderFor returns the Mods subfolder for uid: the one an installed copy

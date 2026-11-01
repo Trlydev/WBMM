@@ -93,11 +93,16 @@ func SetDisabled(nmlDir, uid string, disabled bool) error {
 func readRecords(nmlDir string) (map[string]json.RawMessage, error) {
 	recs := map[string]json.RawMessage{}
 	b, err := os.ReadFile(filepath.Join(nmlDir, RecordsFile))
-	if os.IsNotExist(err) || len(strings.TrimSpace(string(b))) == 0 {
+	if os.IsNotExist(err) {
 		return recs, nil
 	}
 	if err != nil {
+		// Not "empty": rewriting it from nothing would switch every mod
+		// back on, held ones included.
 		return nil, err
+	}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return recs, nil
 	}
 	if err := json.Unmarshal(b, &recs); err != nil {
 		// NML starts over with an empty cache when it can't read the

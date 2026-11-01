@@ -95,7 +95,7 @@ func fileSHA(p string) (string, error) {
 // at runtime, Cecil edits assemblies on disk), so bundling one still needs a
 // look; Newtonsoft.Json only reads and writes JSON.
 func (l knownLib) severity() Severity {
-	if l.Name == "Newtonsoft.Json" {
+	if l.Name == "Newtonsoft.Json" || l.Name == "NeoModLoader" {
 		return Medium
 	}
 	return High
@@ -103,6 +103,9 @@ func (l knownLib) severity() Severity {
 
 func (l knownLib) describe() string {
 	d := l.Name + " " + l.Version + ", identical to the official NuGet package"
+	if l.Name == "NeoModLoader" {
+		d = "NeoModLoader " + l.Version + ", identical to its official release (a compile reference)"
+	}
 	if l.severity() >= High {
 		d += "; this library can rewrite game code, so check what the mod uses it for"
 	}

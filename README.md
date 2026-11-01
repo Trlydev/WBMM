@@ -35,21 +35,26 @@ brings up the open window.
 
 ## Using it
 
-- **Browse:** GameBanana or Steam Workshop; search, sort, or paste a link.
-  Click a mod to open its page: screenshots, description, stats, and its files.
+The window is laid out like a mod manager: a sidebar, a list, and the
+selected item's details beside it.
+
+- **Play WorldBox** starts the game through Steam, after checking that
+  NeoModLoader is there.
+- **My mods:** every mod NeoModLoader will load (the Mods folder, the game's
+  own mods folder and the Workshop) with an on/off switch each. Select one for
+  its safety check result, missing requirements or clashes, updates, its
+  folder, and Remove or Unsubscribe.
+- **Get mods:** GameBanana or Steam Workshop mods; search, sort, or paste a
+  link. Select one for its screenshots, description, stats and files.
   - *GameBanana* mods download into `worldbox/Mods`. Mods with several files
     (versions, ports) let you pick one.
   - *Workshop* mods: **Subscribe** subscribes through your Steam client (Steam
     must be running) and shows the download as it happens. Steam keeps the mod
     updated and removes it when you unsubscribe.
-- **Installed:** every mod NeoModLoader will load, from the Mods folder and
-  the Workshop, with its safety check result and warnings for missing
-  requirements or mods it can't run with. Switch mods on and off, update,
-  open their folder or page, remove or unsubscribe.
-- **Play WorldBox** starts the game through Steam, after checking that
-  NeoModLoader is there.
-- **Setup:** install or update NeoModLoader, the game folder, automatic
-  updates, and the app install.
+- **Worlds:** Workshop worlds (saved maps), kept apart from mods. See the
+  ones you're subscribed to, or browse and subscribe to more.
+- **Settings:** NeoModLoader, the game folder, automatic updates, and the app
+  install.
 
 The first time, turn on **Experimental Mode** in WorldBox's settings, or mods
 won't load. Switch mods on and off with WorldBox closed: NeoModLoader keeps its
@@ -68,19 +73,27 @@ wbmm checks every mod's code before it can run:
   which catches Steam's silent Workshop updates: the 2026 People Playground
   and PlateUp! worms spread through updates of existing mods.
 
-The scanner (`internal/scan`, built on SWG's) reads only the code
-NeoModLoader would actually load, following its rules: `.cs` files outside
-`bin/`, `obj/` and the art folders, a precompiled mod's top-level DLLs,
-`Assemblies/`. Ordinary modding (Harmony, reflection, config files, even
+The scanner (`internal/scan`, built on SWG's) reads the code NeoModLoader
+would actually load, following its rules exactly (checked against its
+source): `.cs` files outside the folders it skips (matched by exact name, as
+it does), top-level DLLs, `Assemblies/`, every DLL of a BepInEx-type mod,
+mod folders in the game's own mods folder, and zip files waiting in `Mods/`
+(a risky one is renamed so NeoModLoader skips it). Bundled libraries count as
+known only by hash (official NuGet releases, NeoModLoader's releases, the
+game's own files); text is read with split strings joined and escapes
+decoded, and data files are checked for stolen-data destinations. Ordinary modding (Harmony, reflection, config files, even
 network calls) is at most "worth a look". **Serious** findings are what malware
 needs and mods don't: reading browser passwords, Discord tokens or Steam
 sessions; Discord webhooks and Telegram bots; autostart entries; hidden
 programs; encoded PowerShell; downloading and running code in the same place;
 Workshop uploads and Steam chat messages (how mod worms spread); writing into
 other mods or NeoModLoader. A serious finding holds the mod until you review
-it and allow that version.
+it and allow that version: it's switched off in NeoModLoader's list, kept off
+even if another mod needs it (NeoModLoader would switch it back on), and a
+changed mod is checked again before it can be switched on.
 
-It was calibrated on ~240 real WorldBox mods from GameBanana and GitHub: only
+Three independent reviews (security, logic, and a red team looking for ways
+around the scanner) went over it before 0.2.2. It was calibrated on ~240 real WorldBox mods from GameBanana and GitHub: only
 NeoModLoader itself and one mod's self-updater (it runs a hidden PowerShell
 script to replace itself with whatever its author's server sends) come out
 serious. The tests use harmless samples that only name what malware does.
@@ -92,8 +105,9 @@ Both are on by default and can be turned off in Setup.
 
 - **wbmm updates itself.** It checks GitHub at start and every six hours,
   downloads the new build, checks it against the release's `SHA256SUMS.txt`
-  **signed with the release key** (Ed25519, public key built into wbmm), swaps
-  it in and offers a restart. `wbmm self-update` does it from a terminal.
+  **signed with the release key** (Ed25519, public key built into wbmm; the
+  signed file names its version, so an old release can't be passed off as
+  new), swaps it in and offers a restart. `wbmm self-update` does it from a terminal.
 - **GameBanana mods update themselves.** Same schedule. An update only follows
   the file you installed (ModernBox `m1` never turns into `m5`) and only
   installs when GameBanana's virus scan passed it. Anything held back shows an

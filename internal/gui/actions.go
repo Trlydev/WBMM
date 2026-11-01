@@ -59,8 +59,7 @@ func (u *ui) endOp(key string) {
 	delete(u.ops, key)
 	u.progress(-1)
 	u.opButtons = nil
-	u.br.repaint()
-	u.inst.reload()
+	u.refreshViews()
 }
 
 // ---------- GameBanana ----------
@@ -81,7 +80,8 @@ func (u *ui) installGBNewest(c modCard) {
 			}
 			if len(files) != 1 {
 				u.endOp(key)
-				u.br.openDetails(c)
+				u.show(pageGet)
+				u.get.open(c)
 				if len(files) > 1 {
 					u.say("%s has %d files. Pick the one you want.", c.Name, len(files))
 				}
@@ -170,11 +170,14 @@ func (u *ui) subscribe(id, name string) {
 				u.fail(fmt.Errorf("%s: %w", name, err))
 				return
 			}
-			if verdict != nil && verdict.Blocked() {
-				u.fail(fmt.Errorf("the safety check switched %s off: its code does things malware does. Review it under Installed", name))
-				return
+			switch {
+			case verdict != nil && verdict.Blocked():
+				u.fail(fmt.Errorf("the safety check switched %s off: its code does things malware does. Review it in My mods", name))
+			case verdict == nil:
+				u.say("Subscribed to %s. Steam downloaded it; it's in WorldBox's world list.", name)
+			default:
+				u.say("Subscribed to %s. Steam downloaded it and the safety check passed it; it loads the next time WorldBox starts.", name)
 			}
-			u.say("Subscribed to %s. Steam downloaded it and the safety check passed it; it loads the next time WorldBox starts.", name)
 		})
 	}()
 }
@@ -208,13 +211,18 @@ func (u *ui) remove(md manager.Mod) {
 		if !ok {
 			return
 		}
-		if err := u.m.Remove(md.UID); err != nil {
-			u.fail(err)
-			return
-		}
-		u.say("Removed %s.", md.Name)
-		u.br.repaint()
-		u.inst.reload()
+		u.say("Removing %s…", md.Name)
+		go func() {
+			err := u.m.Remove(md.UID)
+			fyne.Do(func() {
+				if err != nil {
+					u.fail(err)
+					return
+				}
+				u.say("Removed %s.", md.Name)
+				u.refreshViews()
+			})
+		}()
 	}, u.w)
 	d.SetConfirmText("Remove")
 	d.Show()

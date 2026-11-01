@@ -58,13 +58,19 @@ var WSSorts = map[string]string{
 // Links inside descriptions sit in escaped JSON (\") and don't match.
 var reWSLink = regexp.MustCompile(`href="https://steamcommunity\.com/sharedfiles/filedetails/\?id=(\d+)"`)
 
-// WSBrowseIDs returns the item IDs on one page of the Workshop's "Mod" tag,
-// sorted or searched as asked (30 per page).
-func WSBrowseIDs(query, sort string, page int) ([]string, error) {
+// Workshop tags WorldBox uses.
+const (
+	TagMod   = "Mod"
+	TagWorld = "World"
+)
+
+// WSBrowseIDs returns the item IDs on one page of the Workshop with tag
+// (TagMod or TagWorld), sorted or searched as asked (30 per page).
+func WSBrowseIDs(query, sort, tag string, page int) ([]string, error) {
 	q := url.Values{}
 	q.Set("appid", fmt.Sprint(wsAppID))
 	q.Set("section", "readytouseitems")
-	q.Add("requiredtags[]", "Mod")
+	q.Add("requiredtags[]", tag)
 	q.Set("p", fmt.Sprint(page))
 	if s := strings.TrimSpace(query); s != "" {
 		q.Set("searchtext", s)
@@ -131,8 +137,8 @@ func WSDetails(ids []string) ([]WSItem, error) {
 
 // WSBrowse is WSBrowseIDs followed by WSDetails. more reports whether the
 // Workshop likely has another page.
-func WSBrowse(query, sort string, page int) (items []WSItem, more bool, err error) {
-	ids, err := WSBrowseIDs(query, sort, page)
+func WSBrowse(query, sort, tag string, page int) (items []WSItem, more bool, err error) {
+	ids, err := WSBrowseIDs(query, sort, tag, page)
 	if err != nil {
 		return nil, false, err
 	}

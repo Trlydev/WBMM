@@ -4,12 +4,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Trlydev/WBMM/internal/archive"
 	"github.com/Trlydev/WBMM/internal/game"
 	"github.com/Trlydev/WBMM/internal/nml"
 	"github.com/Trlydev/WBMM/internal/scan"
@@ -56,20 +59,34 @@ func (e *RiskError) Error() string {
 	return fmt.Sprintf("the safety check stopped %s: %s", e.Name, strings.Join(rules, ", "))
 }
 
-// fingerprint identifies a version of a mod folder by its files' names,
-// sizes and modification times (cheap enough to check every few seconds).
+// fingerprint identifies a version of a mod folder: the contents of its
+// code files (.cs, .dll, mod.json) and the names and sizes of the rest. A
+// mod writing its own config files doesn't change it; code rewritten in
+// place, even with its size and time kept, does.
 func fingerprint(dir string) string {
 	h := sha256.New()
 	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		fi, err := d.Info()
-		if err != nil {
+		rel, _ := filepath.Rel(dir, p)
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".cs", ".dll", ".json":
+			if strings.EqualFold(filepath.Ext(p), ".json") && !strings.EqualFold(d.Name(), "mod.json") {
+				break
+			}
+			f, err := os.Open(p)
+			if err != nil {
+				return nil
+			}
+			fmt.Fprintf(h, "%s\x00", filepath.ToSlash(rel))
+			io.Copy(h, io.LimitReader(f, 256<<20))
+			f.Close()
 			return nil
 		}
-		rel, _ := filepath.Rel(dir, p)
-		fmt.Fprintf(h, "%s\x00%d\x00%d\n", filepath.ToSlash(rel), fi.Size(), fi.ModTime().UnixNano())
+		if fi, err := d.Info(); err == nil {
+			fmt.Fprintf(h, "%s\x00%d\n", filepath.ToSlash(rel), fi.Size())
+		}
 		return nil
 	})
 	return hex.EncodeToString(h.Sum(nil))[:24]
@@ -115,6 +132,14 @@ func (m *Manager) check(md Mod) (Verdict, bool, error) {
 	m.mu.Lock()
 	v, had := m.st.Verdicts[md.Folder]
 	m.mu.Unlock()
+	if had && v.Fingerprint == fp && v.Held && v.Blocked() && md.Enabled && md.UID != "" && !gameRunning() {
+		// Held, but on again: NML switches on what an enabled mod needs,
+		// and the in-game Mods window can too. Off again.
+		if gd, err := m.GameDir(); err == nil {
+			nml.SetDisabled(game.NMLDir(gd), md.UID, true)
+		}
+		return v, true, nil
+	}
 	if had && v.Fingerprint == fp && (v.Held || !v.Blocked()) {
 		return v, false, nil
 	}
@@ -136,10 +161,7 @@ func (m *Manager) check(md Mod) (Verdict, bool, error) {
 			}
 		}
 	}
-	m.mu.Lock()
-	m.st.Verdicts[md.Folder] = v
-	err := m.st.save()
-	m.mu.Unlock()
+	err := m.update(func(st *state) { st.Verdicts[md.Folder] = v })
 	return v, newly, err
 }
 
@@ -150,17 +172,40 @@ func (m *Manager) CheckAll() (held []Mod, err error) {
 	if err != nil {
 		return nil, err
 	}
+	blocked := map[string]bool{}
 	for _, md := range mods {
-		if md.Problem != "" {
-			continue
-		}
-		_, newly, cerr := m.check(md)
+		v, newly, cerr := m.check(md)
 		if cerr != nil {
 			err = cerr
 			continue
 		}
 		if newly {
 			held = append(held, md)
+		}
+		if v.Blocked() && md.UID != "" {
+			blocked[md.UID] = true
+		}
+	}
+	if h, aerr := m.checkArchives(); aerr != nil {
+		err = aerr
+	} else {
+		held = append(held, h...)
+	}
+	// NML switches on a held mod if an enabled mod needs it: switch off
+	// what needs a held mod (it couldn't load without it anyway).
+	if len(blocked) > 0 && !gameRunning() {
+		if gd, gerr := m.GameDir(); gerr == nil {
+			for _, md := range mods {
+				if !md.Enabled || blocked[md.UID] {
+					continue
+				}
+				for _, d := range md.deps {
+					if blocked[nml.Symbol(d)] {
+						nml.SetDisabled(game.NMLDir(gd), md.UID, true)
+						break
+					}
+				}
+			}
 		}
 	}
 	return held, err
@@ -175,11 +220,9 @@ func (m *Manager) Accept(md Mod) error {
 		m.mu.Unlock()
 		return fmt.Errorf("%s changed since it was checked; check it again first", md.Name)
 	}
-	v.Accepted, v.Held = true, false
-	m.st.Verdicts[md.Folder] = v
-	err := m.st.save()
 	m.mu.Unlock()
-	if err != nil {
+	v.Accepted, v.Held = true, false
+	if err := m.update(func(st *state) { st.Verdicts[md.Folder] = v }); err != nil {
 		return err
 	}
 	return m.SetEnabled(md.UID, true)
@@ -192,4 +235,56 @@ func (m *Manager) scanStaged(dir string) Verdict {
 		return Verdict{Max: scan.Critical, Findings: []scan.Finding{{Severity: scan.Critical, Rule: "scan-error", Detail: err.Error()}}}
 	}
 	return keep(rep)
+}
+
+// Archives NML unpacks and installs at start: zip files (any of these
+// names) dropped straight into the Mods folder.
+var nmlArchiveExt = []string{".zip", ".7z", ".rar", ".tar", ".tar.gz", ".mod"}
+
+// checkArchives scans archives waiting in the Mods folder. A risky one is
+// renamed to <name>.wbmm-held, which NML ignores.
+func (m *Manager) checkArchives() (held []Mod, err error) {
+	gd, err := m.GameDir()
+	if err != nil {
+		return nil, nil
+	}
+	dir := game.ModsDir(gd)
+	es, _ := os.ReadDir(dir)
+	for _, e := range es {
+		name := strings.ToLower(e.Name())
+		isArchive := false
+		for _, ext := range nmlArchiveExt {
+			if strings.HasSuffix(name, ext) {
+				isArchive = true
+			}
+		}
+		if e.IsDir() || !isArchive {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if head, _ := os.ReadFile(p); len(head) < 4 || string(head[:2]) != "PK" {
+			continue // NML only unpacks zip files
+		}
+		tmp, terr := os.MkdirTemp("", "wbmm-archive-")
+		if terr != nil {
+			return held, terr
+		}
+		var v Verdict
+		if xerr := archive.Extract(p, tmp); xerr != nil {
+			v = Verdict{Max: scan.Critical, Findings: []scan.Finding{{Severity: scan.Critical, Rule: "scan-error",
+				File: e.Name(), Detail: "couldn't be unpacked to check: " + xerr.Error()}}}
+		} else {
+			v = m.scanStaged(tmp)
+		}
+		os.RemoveAll(tmp)
+		if !v.Blocked() {
+			continue
+		}
+		if rerr := os.Rename(p, p+".wbmm-held"); rerr != nil {
+			err = rerr
+			continue
+		}
+		held = append(held, Mod{Name: e.Name(), Folder: p + ".wbmm-held", Problem: "archive held by the safety check"})
+	}
+	return held, err
 }

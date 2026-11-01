@@ -13,7 +13,7 @@ import (
 	"github.com/Trlydev/WBMM/internal/desktop"
 )
 
-type setupView struct {
+type settingsPage struct {
 	u    *ui
 	root fyne.CanvasObject
 
@@ -28,8 +28,8 @@ type setupView struct {
 	appBtn   *widget.Button
 }
 
-func newSetupView(u *ui) *setupView {
-	s := &setupView{u: u}
+func newSettingsPage(u *ui) *settingsPage {
+	s := &settingsPage{u: u}
 
 	s.nmlText = label("Checking…")
 	s.nmlBtn = widget.NewButtonWithIcon("Install NeoModLoader", theme.DownloadIcon(), u.installLoader)
@@ -65,7 +65,7 @@ func newSetupView(u *ui) *setupView {
 	s.appAuto.SetChecked(!cfg.NoAppUpdates)
 	checkNow := widget.NewButtonWithIcon("Check now", theme.ViewRefreshIcon(), func() {
 		go u.selfUpdate(true)
-		u.inst.checkUpdates(true)
+		u.mine.checkUpdates(true)
 	})
 	updates := section("Updates",
 		"Checked when wbmm starts and every six hours. Mod updates only follow the file you installed (a mod's other versions or ports are never swapped in) and only install when GameBanana's virus scan passed them. Steam keeps Workshop mods updated itself.",
@@ -84,8 +84,9 @@ func newSetupView(u *ui) *setupView {
 
 	about := mutedLabel("WorldBox Mod Manager " + u.version + " · github.com/Trlydev/WBMM · Not affiliated with Maxim Karpenko, Valve, GameBanana or the NeoModLoader team.")
 
-	s.root = container.NewVScroll(maxWidth(container.New(layout.NewCustomPaddedLayout(0, 16, 0, 8),
-		container.NewVBox(nml, gameCard, updates, app, how, about)), 900))
+	s.root = container.NewBorder(pageHeader("Settings"), nil, nil, nil,
+		container.NewVScroll(maxWidth(container.New(layout.NewCustomPaddedLayout(0, 16, 0, 8),
+			container.NewVBox(nml, gameCard, updates, app, how, about)), 860)))
 	return s
 }
 
@@ -100,17 +101,17 @@ func section(name, desc string, objs ...fyne.CanvasObject) fyne.CanvasObject {
 	return container.New(layout.NewCustomPaddedLayout(0, 8, 0, 0), card(box, 14))
 }
 
-func (s *setupView) saveGameDir() {
+func (s *settingsPage) saveGameDir() {
 	if err := s.u.m.SetGameDir(s.gameDir.Text); err != nil {
 		s.u.fail(err)
 		return
 	}
 	s.u.say("Game folder saved.")
 	go s.u.refreshStatus(true)
-	s.u.inst.reload()
+	s.u.mine.reload()
 }
 
-func (s *setupView) saveUpdates() {
+func (s *settingsPage) saveUpdates() {
 	if s.modsAuto == nil || s.appAuto == nil {
 		return
 	}
@@ -119,7 +120,7 @@ func (s *setupView) saveUpdates() {
 	}
 }
 
-func (s *setupView) refresh() {
+func (s *settingsPage) refresh() {
 	u := s.u
 	switch {
 	case u.gameErr != nil:

@@ -128,3 +128,35 @@ func TestSetDisabledLegacyList(t *testing.T) {
 		t.Errorf("after enabling A_MOD: %v", off)
 	}
 }
+
+// NML reads mod.json with Newtonsoft.Json: comments, trailing commas and
+// a GUID without a name are all fine.
+func TestReadDeclareLoose(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "mod.json")
+	write(t, p, "{ // the mod\n \"name\":\"Evil\", \"author\":\"Bad\", /* x */ }")
+	if d, err := ReadDeclare(p); err != nil || d.UID() != "BAD_EVIL" {
+		t.Errorf("comments and trailing comma: %+v, %v", d, err)
+	}
+	write(t, p, `{"GUID":"bad.evil2"}`)
+	if d, err := ReadDeclare(p); err != nil || d.UID() != "BAD_EVIL2" {
+		t.Errorf("GUID only: %+v, %v", d, err)
+	}
+}
+
+// NML takes the shallowest mod.json.
+func TestFindDeclareBreadthFirst(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a", "deep", "mod.json"), `{"name":"deep"}`)
+	write(t, filepath.Join(dir, "z", "mod.json"), `{"name":"z"}`)
+	if p, ok := FindDeclare(dir); !ok || p != filepath.Join(dir, "z", "mod.json") {
+		t.Errorf("FindDeclare = %q", p)
+	}
+}
+
+// C# upper-cases per UTF-16 unit and leaves surrogate halves alone.
+func TestSymbolOutsideBMP(t *testing.T) {
+	if got := Symbol("evil𐐨"); got != "EVIL𐐨" {
+		t.Errorf("Symbol = %q", got)
+	}
+}

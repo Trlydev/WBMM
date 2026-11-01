@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -14,93 +15,110 @@ import (
 	"github.com/Trlydev/WBMM/internal/sources"
 )
 
-// detailsView is a mod's preview page: pictures, description, stats, and
-// its files (GameBanana) or the Subscribe button (Workshop).
+// detailsView is the panel beside a browser list: pictures, what to do
+// with the item, its files (GameBanana) and its description.
 type detailsView struct {
-	b    *browseView
+	u    *ui
 	root *fyne.Container
 
-	card    modCard
-	seq     int
-	hero    *fyne.Container // the big picture
-	strip   *fyne.Container // screenshot thumbnails
-	name    *widget.Label
-	byline  *widget.Label
-	stats   *fyne.Container
-	actions *fyne.Container
-	files   *fyne.Container
-	filesH  fyne.CanvasObject
-	about   *widget.Label
+	card     modCard
+	has      bool
+	seq      int
+	hero     *fyne.Container
+	strip    *fyne.Container
+	stripBox *container.Scroll
+	name     *widget.Label
+	byline   *widget.Label
+	stats    *widget.Label
+	actions  *fyne.Container
+	files    *fyne.Container
+	about    *widget.Label
+	body     fyne.CanvasObject
+	empty    fyne.CanvasObject
 
 	gb *sources.GBProfile
 	ws *sources.WSItem
 }
 
-func newDetailsView(b *browseView) *detailsView {
-	d := &detailsView{b: b}
-	back := widget.NewButtonWithIcon("Back to mods", theme.NavigateBackIcon(), b.closeDetails)
-	back.Importance = widget.LowImportance
-	page := widget.NewButtonWithIcon("Open page", theme.ComputerIcon(), func() { b.u.openURL(d.card.URL) })
-	page.Importance = widget.LowImportance
-
+func newDetailsView(u *ui) *detailsView {
+	d := &detailsView{u: u}
 	d.hero = container.NewStack()
 	d.strip = container.NewHBox()
 	d.name = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	d.name.SizeName = sHuge
+	d.name.SizeName = sTitle
 	d.name.Wrapping = fyne.TextWrapWord
 	d.byline = mutedLabel("")
-	d.stats = container.NewGridWithColumns(2)
+	d.stats = mutedLabel("")
 	d.actions = container.NewVBox()
 	d.files = container.NewVBox()
-	d.filesH = title("Files")
 	d.about = label("")
-
-	heroBox := fixedSize(d.hero, 560, 315)
-	left := container.NewVBox(heroBox, container.NewHScroll(d.strip))
-	right := card(container.NewVBox(d.name, d.byline, widget.NewSeparator(), d.stats, widget.NewSeparator(), d.actions), 14)
-	top := container.New(&detailsTop{}, left, right)
-	body := container.NewVBox(top, d.filesH, d.files, title("About this mod"), card(d.about, 12))
-	d.root = container.NewBorder(container.NewBorder(nil, nil, back, page), nil, nil, nil,
-		container.NewVScroll(container.New(layout.NewCustomPaddedLayout(4, 16, 0, 8), body)))
+	d.stripBox = container.NewHScroll(d.strip)
+	content := container.NewVBox(
+		heightOf(d.hero, 230),
+		d.stripBox,
+		tight(d.name, d.byline, d.stats),
+		d.actions,
+		d.files,
+		section2("About", d.about),
+	)
+	d.body = container.NewVScroll(container.New(layout.NewCustomPaddedLayout(0, 12, 12, 8), content))
+	d.empty = placeholder("Pick something on the left to see it here.")
+	d.root = container.NewStack(d.empty)
 	return d
 }
 
-// detailsTop puts the pictures beside the info panel, which takes the
-// rest of the width.
-type detailsTop struct{}
-
-const infoMinW = 320
-
-func (detailsTop) MinSize(objs []fyne.CanvasObject) fyne.Size {
-	l, r := objs[0].MinSize(), objs[1].MinSize()
-	return fyne.NewSize(l.Width+16+infoMinW, max(l.Height, r.Height))
+// heightOf gives o a fixed height and the full width.
+func heightOf(o fyne.CanvasObject, h float32) fyne.CanvasObject {
+	return container.New(&heightLayout{h}, o)
 }
 
-func (detailsTop) Layout(objs []fyne.CanvasObject, size fyne.Size) {
-	l, r := objs[0], objs[1]
-	lw := l.MinSize().Width
-	l.Resize(fyne.NewSize(lw, l.MinSize().Height))
-	l.Move(fyne.NewPos(0, 0))
-	r.Resize(fyne.NewSize(max(size.Width-lw-16, infoMinW), size.Height))
-	r.Move(fyne.NewPos(lw+16, 0))
+type heightLayout struct{ h float32 }
+
+func (l *heightLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(objs[0].MinSize().Width, l.h)
+}
+func (l *heightLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	objs[0].Resize(fyne.NewSize(size.Width, l.h))
+	objs[0].Move(fyne.NewPos(0, 0))
+}
+
+// section2 is a small heading over content.
+func section2(name string, content fyne.CanvasObject) fyne.CanvasObject {
+	h := text(strings.ToUpper(name), pal().muted, sSmall, true)
+	return container.NewVBox(container.New(layout.NewCustomPaddedLayout(10, 0, 4, 0), h), content)
 }
 
 func (d *detailsView) open(c modCard) {
-	d.card, d.gb, d.ws = c, nil, nil
+	d.card, d.has, d.gb, d.ws = c, true, nil, nil
 	d.seq++
 	seq := d.seq
+	d.root.Objects = []fyne.CanvasObject{d.body}
+	d.root.Refresh()
 	d.name.SetText(c.Name)
-	by := ""
+	var by []string
 	if c.Author != "" {
-		by = "by " + c.Author
+		by = append(by, "by "+c.Author)
 	}
 	if c.Category != "" {
-		by += " · " + c.Category
+		by = append(by, c.Category)
 	}
-	d.byline.SetText(by)
-	d.setHero(c.Thumb, 460)
+	switch {
+	case c.Kind == "world":
+		by = append(by, "Workshop world")
+	case c.Source == "workshop":
+		by = append(by, "Workshop mod")
+	default:
+		by = append(by, "GameBanana")
+	}
+	d.byline.SetText(strings.Join(by, " · "))
+	if c.Thumb != "" {
+		d.setHero(c.Thumb, 460)
+	} else {
+		d.setLocalHero(c.Local)
+	}
 	d.strip.Objects = nil
 	d.strip.Refresh()
+	d.stripBox.Hide()
 	d.about.SetText("Loading…")
 	d.files.Objects = nil
 	d.files.Refresh()
@@ -126,7 +144,7 @@ func (d *detailsView) open(c modCard) {
 				return
 			}
 			if err != nil {
-				d.about.SetText("Couldn't load this mod's page: " + err.Error())
+				d.about.SetText("Couldn't load its page: " + err.Error())
 				return
 			}
 			d.gb, d.ws = gb, ws
@@ -138,48 +156,63 @@ func (d *detailsView) open(c modCard) {
 func (d *detailsView) setHero(url string, w int) {
 	img := newRemoteImage(url, w, canvas.ImageFillContain)
 	bg := canvas.NewRectangle(pal().surface2)
-	bg.CornerRadius = 12
+	bg.CornerRadius = 10
+	d.hero.Objects = []fyne.CanvasObject{bg, img}
+	d.hero.Refresh()
+}
+
+func (d *detailsView) setLocalHero(path string) {
+	img := localImage(path, 900)
+	img.FillMode = canvas.ImageFillContain
+	bg := canvas.NewRectangle(pal().surface2)
+	bg.CornerRadius = 10
 	d.hero.Objects = []fyne.CanvasObject{bg, img}
 	d.hero.Refresh()
 }
 
 func (d *detailsView) fill() {
-	if d.gb != nil {
-		p := d.gb
-		text := sources.HTMLText(p.Text)
+	switch {
+	case d.gb != nil:
+		text := sources.HTMLText(d.gb.Text)
 		if text == "" {
-			text = p.Description
+			text = d.gb.Description
 		}
-		if text == "" {
-			text = "No description."
-		}
-		d.about.SetText(text)
-		shots := p.Screenshots()
+		d.about.SetText(orNone(text))
+		shots := d.gb.Screenshots()
 		if len(shots) > 0 {
-			d.setHero(shots[0], 1120)
+			d.setHero(shots[0], 1000)
 		}
 		d.paintStrip(shots)
-	} else if d.ws != nil {
-		text := sources.BBText(d.ws.Description)
-		if text == "" {
-			text = "No description."
+	case d.ws != nil:
+		d.about.SetText(orNone(sources.BBText(d.ws.Description)))
+		if d.ws.Preview != "" {
+			d.setHero(d.ws.Preview, 1000)
 		}
-		d.about.SetText(text)
-		d.setHero(d.ws.Preview, 1120)
-		d.paintStrip(nil)
 	}
 	d.paintStats()
 	d.paintActions()
 }
 
+func orNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "No description."
+	}
+	return s
+}
+
 func (d *detailsView) paintStrip(shots []string) {
 	d.strip.Objects = nil
+	if len(shots) < 2 {
+		d.stripBox.Hide()
+	} else {
+		d.stripBox.Show()
+	}
 	if len(shots) > 1 {
 		for _, s := range shots {
 			s := s
-			img := newRemoteImage(s, 240, canvas.ImageFillCover)
-			img.CornerRadius = 6
-			d.strip.Add(newTappable(fixedSize(img, 112, 63), func() { d.setHero(s, 1120) }, nil))
+			img := newRemoteImage(s, 220, canvas.ImageFillCover)
+			img.CornerRadius = 5
+			d.strip.Add(newTappable(fixedSize(img, 96, 54), func() { d.setHero(s, 1000) }, nil))
 		}
 	}
 	d.strip.Refresh()
@@ -187,118 +220,114 @@ func (d *detailsView) paintStrip(shots []string) {
 
 func (d *detailsView) paintStats() {
 	c := d.card
-	var rows [][2]string
+	var parts []string
 	switch {
 	case d.gb != nil:
-		rows = [][2]string{
-			{"Downloads", count(d.gb.Downloads)}, {"Likes", count(d.gb.Likes)},
-			{"Views", count(d.gb.Views)}, {"Updated", ago(c.Updated)},
-		}
+		parts = []string{count(d.gb.Downloads) + " downloads", count(d.gb.Likes) + " likes", count(d.gb.Views) + " views"}
 		if d.gb.Version != "" {
-			rows = append(rows, [2]string{"Version", d.gb.Version})
+			parts = append(parts, "version "+d.gb.Version)
 		}
 	case d.ws != nil:
-		rows = [][2]string{
-			{"Subscribers", count(d.ws.Subs)}, {"Favorites", count(d.ws.Favorited)},
-			{"Views", count(d.ws.Views)}, {"Updated", ago(d.ws.Updated)},
-			{"Size", size(atoi64(d.ws.Size))}, {"Created", time.Unix(d.ws.Created, 0).Format("Jan 2006")},
-		}
-	default:
-		rows = [][2]string{{"Updated", ago(c.Updated)}}
+		parts = []string{count(d.ws.Subs) + " subscribers", count(d.ws.Favorited) + " favorites", size(atoi64(d.ws.Size)),
+			"since " + time.Unix(d.ws.Created, 0).Format("Jan 2006")}
 	}
-	d.stats.Objects = nil
-	for _, r := range rows {
-		d.stats.Add(container.NewVBox(mutedLabel(r[0]), widget.NewLabelWithStyle(r[1], fyne.TextAlignLeading, fyne.TextStyle{Bold: true})))
+	if u := ago(c.Updated); u != "" {
+		parts = append(parts, "updated "+u)
 	}
-	d.stats.Refresh()
+	d.stats.SetText(strings.Join(parts, " · "))
 }
 
-// paintActions draws the buttons for what can be done with the mod now.
+// paintActions draws what can be done with the item now.
 func (d *detailsView) paintActions() {
-	u, c := d.b.u, d.card
+	if !d.has {
+		return
+	}
+	u, c := d.u, d.card
 	d.actions.Objects = nil
 	key := u.opKey(c.Source, c.ID)
+	page := widget.NewButtonWithIcon("Open page", theme.ComputerIcon(), func() { u.openURL(c.URL) })
 	switch {
-	case c.IsMap:
-		d.actions.Add(mutedLabel("This is a world map, not a mod. Download it from its page."))
-		d.actions.Add(widget.NewButton("Open page", func() { u.openURL(c.URL) }))
+	case c.Kind == "map":
+		d.actions.Add(mutedLabel("A world map from GameBanana. Download it from its page and load it from WorldBox's saves."))
+		d.actions.Add(container.NewHBox(page))
 	case c.Source == "workshop":
 		if u.m.Subscribed()[c.ID] {
-			on := widget.NewButtonWithIcon("Subscribed", theme.ConfirmIcon(), nil)
-			on.Importance = widget.SuccessImportance
 			off := widget.NewButtonWithIcon("Unsubscribe", theme.DeleteIcon(), func() { u.unsubscribe(c.ID, c.Name) })
 			u.bindOp(key, off)
-			d.actions.Add(container.NewGridWithColumns(2, on, off))
-			d.actions.Add(mutedLabel("Steam keeps it up to date. It loads from Steam's Workshop folder."))
+			d.actions.Add(container.NewHBox(badge("subscribed", pal().grass), layout.NewSpacer(), off, page))
+			if c.Kind == "world" {
+				d.actions.Add(mutedLabel("Steam keeps it updated. Load it from WorldBox's saves menu."))
+			} else {
+				d.actions.Add(mutedLabel("Steam keeps it updated; wbmm checks every update before the game loads it."))
+			}
 		} else {
-			sub := widget.NewButtonWithIcon("Subscribe and download", theme.DownloadIcon(), func() { u.subscribe(c.ID, c.Name) })
+			sub := widget.NewButtonWithIcon("Subscribe", theme.DownloadIcon(), func() { u.subscribe(c.ID, c.Name) })
 			sub.Importance = widget.HighImportance
 			u.bindOp(key, sub)
-			d.actions.Add(sub)
-			d.actions.Add(mutedLabel("wbmm subscribes through your Steam client and follows the download. Steam needs to be running."))
+			d.actions.Add(container.NewHBox(sub, page))
+			d.actions.Add(mutedLabel("Subscribes through your Steam client (Steam needs to be running) and follows the download."))
 		}
 	default:
 		have := u.m.InstalledGB()[atoi(c.ID)]
+		row := container.NewHBox()
+		if have {
+			row.Add(badge("installed", pal().grass))
+			row.Add(layout.NewSpacer())
+		}
 		if d.gb != nil && len(d.gb.Files) > 0 {
 			newest := d.gb.Files[0]
-			lbl := "Install newest file"
+			lbl := "Install"
 			if have {
-				lbl = "Reinstall newest file"
+				lbl = "Reinstall newest"
 			}
 			btn := widget.NewButtonWithIcon(lbl, theme.DownloadIcon(), func() { u.installGB(atoi(c.ID), newest, c.Name, false) })
-			btn.Importance = widget.HighImportance
+			if !have {
+				btn.Importance = widget.HighImportance
+			}
 			u.bindOp(key, btn)
-			d.actions.Add(btn)
+			row.Add(btn)
 		}
-		if have {
-			d.actions.Add(mutedLabel("Installed in your Mods folder. wbmm keeps it updated."))
-		} else {
-			d.actions.Add(mutedLabel("Downloads into your Mods folder after GameBanana's virus scan passed it."))
-		}
+		row.Add(page)
+		d.actions.Add(row)
 	}
 	d.actions.Refresh()
 	d.paintFiles()
 }
 
 func (d *detailsView) paintFiles() {
-	u, c := d.b.u, d.card
+	u, c := d.u, d.card
 	d.files.Objects = nil
-	if d.gb == nil || len(d.gb.Files) == 0 || c.IsMap {
-		d.filesH.Hide()
+	if d.gb == nil || len(d.gb.Files) < 2 || c.Kind == "map" {
 		d.files.Refresh()
 		return
 	}
-	d.filesH.Show()
 	installed := u.m.InstalledFiles(atoi(c.ID))
 	p := pal()
+	list := container.NewVBox()
 	for _, f := range d.gb.Files {
 		f := f
-		meta := fmt.Sprintf("%s · %s", size(f.Size), ago(f.Added))
+		meta := size(f.Size) + " · " + ago(f.Added)
 		if f.Version != "" {
 			meta += " · " + f.Version
 		}
-		scan := badge("virus scan passed", p.grass)
 		if !f.Clean() {
-			scan = badge("virus scan not passed", p.bad)
+			meta += " · virus scan not passed"
 		}
-		metaL := widget.NewLabel(meta) // not wrapped: it sits beside the badge
-		metaL.SizeName, metaL.Importance = sSmall, widget.LowImportance
-		info := container.NewVBox(
-			widget.NewLabelWithStyle(f.Name, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			container.NewHBox(metaL, container.NewCenter(scan)))
-		if f.Description != "" {
-			info.Add(mutedLabel(f.Description))
-		}
-		var btn *widget.Button
+		info := tight(line(f.Name, true, theme.SizeNameText, widget.MediumImportance), line(meta, false, sSmall, widget.LowImportance))
+		var right fyne.CanvasObject
 		if installed[f.ID] {
-			btn = widget.NewButtonWithIcon("Installed", theme.ConfirmIcon(), func() { u.installGB(atoi(c.ID), f, c.Name, false) })
-			btn.Importance = widget.LowImportance
+			right = badge("installed", p.grass)
 		} else {
-			btn = widget.NewButtonWithIcon("Install", theme.DownloadIcon(), func() { u.installGB(atoi(c.ID), f, c.Name, false) })
+			btn := widget.NewButton("Install", func() { u.installGB(atoi(c.ID), f, c.Name, false) })
+			u.bindOp(u.opKey(c.Source, c.ID), btn)
+			right = btn
 		}
-		u.bindOp(u.opKey(c.Source, c.ID), btn)
-		d.files.Add(card(container.NewBorder(nil, nil, nil, container.NewVBox(layout.NewSpacer(), btn, layout.NewSpacer()), info), 10))
+		list.Add(container.NewBorder(nil, nil, nil, container.NewCenter(right), info))
+		if f.Description != "" {
+			list.Add(mutedLabel(f.Description))
+		}
 	}
+	d.files.Add(section2(fmt.Sprintf("Files (%d)", len(d.gb.Files)), list))
 	d.files.Refresh()
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/Trlydev/WBMM/internal/desktop"
 	"github.com/Trlydev/WBMM/internal/gui"
 	"github.com/Trlydev/WBMM/internal/manager"
+	"github.com/Trlydev/WBMM/internal/nml"
 	"github.com/Trlydev/WBMM/internal/scan"
 	"github.com/Trlydev/WBMM/internal/selfupdate"
 	"github.com/Trlydev/WBMM/internal/sources"
@@ -132,7 +133,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		}
 		q := strings.Join(fs.Args(), " ")
 		if *ws {
-			items, _, err := sources.WSBrowse(q, "subs", 1)
+			items, _, err := sources.WSBrowse(q, "subs", sources.TagMod, 1)
 			if err != nil {
 				return err
 			}
@@ -308,7 +309,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		}
 		ref := strings.TrimPrefix(args[0], "ws:")
 		for _, md := range mods {
-			if md.UID == strings.ToUpper(ref) || md.WorkshopID == ref {
+			if md.UID == nml.Symbol(ref) || md.WorkshopID == ref {
 				return m.Accept(md)
 			}
 		}
@@ -318,7 +319,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: wbmm %s UID (see wbmm list)", cmd)
 		}
-		uid := strings.ToUpper(args[0])
+		uid := nml.Symbol(args[0]) // "author.name" or the UID itself
 		switch cmd {
 		case "remove":
 			return m.Remove(uid)
@@ -407,6 +408,9 @@ func scanPath(m *manager.Manager, p string) (*scan.Report, error) {
 	return scan.Mod(tmp, opt)
 }
 
+// Flags that take no value.
+var boolFlags = map[string]bool{"force": true, "accept-risk": true, "json": true, "yes": true, "workshop": true}
+
 // reorder puts flags before the mod reference, so "install gb:1 -file 2"
 // works as well as "install -file 2 gb:1".
 func reorder(args []string) []string {
@@ -414,7 +418,7 @@ func reorder(args []string) []string {
 	for i := 0; i < len(args); i++ {
 		if strings.HasPrefix(args[i], "-") {
 			flags = append(flags, args[i])
-			if !strings.Contains(args[i], "=") && args[i] != "-force" && args[i] != "--force" && i+1 < len(args) {
+			if !strings.Contains(args[i], "=") && !boolFlags[strings.TrimLeft(args[i], "-")] && i+1 < len(args) {
 				flags = append(flags, args[i+1])
 				i++
 			}

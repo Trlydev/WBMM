@@ -58,6 +58,17 @@ var apiRules = []apiRule{
 		"System.IO.Directory.EnumerateDirectories", "System.IO.Directory.GetFileSystemEntries", "System.IO.DirectoryInfo"}, "lists files/folders on disk"},
 	{"open-url", Medium, []string{"UnityEngine.Application.OpenURL"}, "opens a URL in the browser"},
 	{"threads", Info, []string{"System.Threading.Thread", "System.Threading.ThreadPool", "System.Threading.Tasks.Task.Run"}, "starts background threads"},
+	// NeoModLoader's own API reaches its folders and the Workshop without
+	// naming them in strings.
+	{"names-loader-files", High, []string{"NeoModLoader.constants.Paths.CompiledModsPath",
+		"NeoModLoader.constants.Paths.CommonModsWorkshopPath", "NeoModLoader.constants.Paths.ModCompileRecordPath",
+		"NeoModLoader.constants.Paths.ModsDisabledRecordPath", "NeoModLoader.constants.Paths.NMLModPath",
+		"NeoModLoader.constants.Paths.ManagedPath"}, "uses NeoModLoader's paths to its internals, other Workshop mods or game code"},
+	// How a mod finds its own folder: normal on its own.
+	{"uses-mods-folder", Info, []string{"NeoModLoader.constants.Paths.ModsPath", "NeoModLoader.constants.Paths.NativeModsPath"}, "uses the Mods folder's path (mods find their own folder this way)"},
+	{"workshop-upload", Critical, []string{"NeoModLoader.services.ModWorkshopService.UploadMod", "NeoModLoader.services.ModWorkshopService.TryEditMod"}, "uploads to the Steam Workshop through NeoModLoader"},
+	{"nml-workshop", High, []string{"NeoModLoader.services.ModWorkshopService", "NeoModLoader.services.ModWorkshopServiceWindows",
+		"NeoModLoader.services.ModWorkshopServiceUnix", "NeoModLoader.services.WorkshopDownloadQueue"}, "uses NeoModLoader's Workshop service"},
 }
 
 // Framework namespaces a mod may import without a finding (and below them).
@@ -87,6 +98,9 @@ var deniedBelowAllowed = []string{
 
 var frameworkRoots = map[string]bool{"System": true, "Microsoft": true, "UnityEngine": true, "UnityEditor": true, "Mono": true,
 	"Steamworks": true, "Facepunch": true, "TMPro": true, "Newtonsoft": true, "Unity": true}
+
+// NeoModLoader namespaces are the loader's, not a framework's: using them
+// is normal, but names inside them are resolved for the rules above.
 
 // namespacePatterns name whole namespaces. When the namespace part came from
 // a `using`, the code must name something inside it (Emit.OpCodes), not

@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -75,6 +76,9 @@ type Progress struct {
 
 // One operation at a time: two helpers would both hold the API open.
 var mu sync.Mutex
+
+// helperSilence is how long the helper may go without a word.
+const helperSilence = 90 * time.Second
 
 // marker starts each line the helper means for wbmm; Steam's library also
 // prints to the same output.
@@ -138,9 +142,19 @@ func run(gameDir, op, id string, progress func(Progress)) (Progress, error) {
 		return Progress{}, err
 	}
 	var last Progress
+	// The helper reports at least every few seconds while it works; one
+	// that falls silent (a Steam client that never answers) is stopped, so
+	// it can't hold up every other Steam operation.
+	var silent atomic.Bool
+	watchdog := time.AfterFunc(helperSilence, func() {
+		silent.Store(true)
+		cmd.Process.Kill()
+	})
+	defer watchdog.Stop()
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
 	for sc.Scan() {
+		watchdog.Reset(helperSilence)
 		line, ok := strings.CutPrefix(sc.Text(), marker)
 		if !ok {
 			continue
@@ -155,6 +169,9 @@ func run(gameDir, op, id string, progress func(Progress)) (Progress, error) {
 		}
 	}
 	werr := cmd.Wait()
+	if silent.Load() {
+		return last, errors.New("Steam stopped answering; check that it's running and try again")
+	}
 	if last.Error != "" {
 		return last, errors.New(last.Error)
 	}

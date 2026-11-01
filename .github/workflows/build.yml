@@ -66,7 +66,6 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-            ~/go/bin
           key: release-${{ hashFiles('go.sum') }}-${{ github.sha }}
           restore-keys: release-${{ hashFiles('go.sum') }}-
       - name: Pick version
@@ -91,7 +90,7 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          [ -x ~/go/bin/go-winres ] || go install github.com/tc-hib/go-winres@v0.3.3 # module checksum verified by sum.golang.org
+          go install github.com/tc-hib/go-winres@v0.3.3 # module checksum verified by sum.golang.org
           num=$(echo "${VERSION#v}" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+).*/\1.\2.\3/')
           case "$num" in *[!0-9.]*|"") num=0.0.0 ;; esac
           ~/go/bin/go-winres simply --arch amd64 --out cmd/wbmm/rsrc \
@@ -109,7 +108,9 @@ jobs:
           # A GUI program: no console window on double-click.
           GOOS=windows CC=x86_64-w64-mingw32-gcc go build -trimpath -ldflags "$flags -H windowsgui" -o dist/wbmm-windows-amd64.exe ./cmd/wbmm & b=$!
           wait $a && wait $b
-          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+          # The version line is signed with the checksums: wbmm refuses a
+          # signed file that names another version (no rollbacks).
+          cd dist && sha256sum * > SHA256SUMS.txt && echo "# wbmm ${VERSION}" >> SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wbmm-${{ steps.ver.outputs.version }}

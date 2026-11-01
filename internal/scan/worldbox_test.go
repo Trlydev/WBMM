@@ -144,12 +144,20 @@ func TestOnlyWhatNMLLoads(t *testing.T) {
 		t.Error("the compiled file under Assemblies/Ref was not checked")
 	}
 
-	// A mod with a DLL at its top level is precompiled: NML loads the DLL
-	// and compiles none of its .cs files.
-	root = writeMod(t, map[string]string{"mod.json": modJSON, "Code/A.cs": evil, "Mod.dll": "not really a dll"})
+	// A top-level "X.DLL" makes the mod precompiled on Windows but not on
+	// Linux (NML's *.dll match is case-sensitive there), where the .cs files
+	// are compiled: they count either way.
+	root = writeMod(t, map[string]string{"mod.json": modJSON, "Code/A.cs": evil, "Mod.DLL": "not really a dll"})
 	r, _ = Mod(root, Options{})
-	if hasSev(r, "exfiltration", Critical) {
-		t.Error("a precompiled mod's .cs file counted as compiled")
+	if !hasSev(r, "exfiltration", Critical) {
+		t.Error("a precompiled-looking mod's .cs file was skipped")
+	}
+
+	// NML skips folders by exact name: "bin" is skipped, "Bin" compiled.
+	root = writeMod(t, map[string]string{"mod.json": modJSON, "Bin/A.cs": evil})
+	r, _ = Mod(root, Options{})
+	if !hasSev(r, "exfiltration", Critical) {
+		t.Error("code in Bin/ (which NML compiles) was skipped")
 	}
 }
 
@@ -181,5 +189,44 @@ func TestLooseReplacementGameCode(t *testing.T) {
 		if f.Rule == "replaces-game-code" {
 			t.Errorf("a DLL merely named Assembly-CSharp.dll was vouched for: %+v", f)
 		}
+	}
+}
+
+// Strings built from pieces, escapes, and data files still count.
+func TestSplitStrings(t *testing.T) {
+	cases := map[string]string{
+		"concatenated": `class A { string u = "https://disc" + "ord.com/api/web" + "hooks/1/x"; }`,
+		"path parts":   `class A { string p = Path.Combine(appData, "discord", "Local Storage", "leveldb"); }`,
+		"escapes":      `class A { string u = "https://discord.com/api/\u0077ebhooks/1/x"; }`,
+		"interpolated": `class A { string u = $"https://discord.com/api/" + $"webhooks/{id}/{token}"; }`,
+	}
+	for name, code := range cases {
+		root := writeMod(t, map[string]string{"mod.json": modJSON, "Code/A.cs": code})
+		r, _ := Mod(root, Options{})
+		if s, _ := worst(r); s < Critical {
+			t.Errorf("%s: not CRITICAL: %+v", name, r.Findings)
+		}
+	}
+	root := writeMod(t, map[string]string{"mod.json": modJSON, "Code/A.cs": `class A {}`,
+		"config.json": `{"report":"https://discord.com/api/webhooks/1/x"}`})
+	r, _ := Mod(root, Options{})
+	if !hasSev(r, "exfiltration", High) {
+		t.Errorf("webhook in a data file not reported: %+v", r.Findings)
+	}
+	// A bare word in a comment isn't a command.
+	root = writeMod(t, map[string]string{"mod.json": modJSON, "Code/A.cs": "// like crontab, runs every tick\nclass A {}"})
+	r, _ = Mod(root, Options{})
+	if s, _ := worst(r); s >= High {
+		t.Errorf("a comment counted: %+v", r.Findings)
+	}
+}
+
+// Calling NeoModLoader's own Workshop upload is a Workshop upload.
+func TestNMLWorkshopAPI(t *testing.T) {
+	root := writeMod(t, map[string]string{"mod.json": modJSON,
+		"Code/A.cs": `using NeoModLoader.services; class A { void F(IMod m) { ModWorkshopService.UploadMod(m, "update"); } }`})
+	r, _ := Mod(root, Options{})
+	if !hasSev(r, "workshop-upload", Critical) {
+		t.Errorf("NML upload not CRITICAL: %+v", r.Findings)
 	}
 }

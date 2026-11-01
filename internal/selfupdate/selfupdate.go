@@ -148,7 +148,7 @@ func download(url string, w io.Writer) error {
 	return err
 }
 
-func expectedSum(sumsURL, sigURL, asset string) (string, error) {
+func expectedSum(sumsURL, sigURL, asset, version string) (string, error) {
 	var b strings.Builder
 	if err := download(sumsURL, &b); err != nil {
 		return "", err
@@ -165,6 +165,11 @@ func expectedSum(sumsURL, sigURL, asset string) (string, error) {
 	}
 	if err := verifySums([]byte(b.String()), sig.String()); err != nil {
 		return "", err
+	}
+	// The signed file names the version it belongs to, so an older signed
+	// release can't be republished as a newer one (a rollback).
+	if !strings.Contains("\n"+b.String(), "\n# wbmm "+version+"\n") {
+		return "", fmt.Errorf("the signed checksums aren't for %s: not updating", version)
 	}
 	sc := bufio.NewScanner(strings.NewReader(b.String()))
 	for sc.Scan() {
@@ -190,7 +195,7 @@ func Apply(r *Release, logf func(string, ...any)) error {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
-	want, err := expectedSum(r.sumsURL, r.sigURL, r.asset)
+	want, err := expectedSum(r.sumsURL, r.sigURL, r.asset, r.Version)
 	if err != nil {
 		return err
 	}

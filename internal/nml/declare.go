@@ -4,7 +4,6 @@
 package nml
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -13,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/Trlydev/WBMM/internal/scan"
 )
 
 // DeclFile is the file that makes a folder an NML mod.
@@ -46,12 +47,20 @@ func (d Declare) UID() string {
 }
 
 // Symbol turns a mod ID as written in mod.json (a GUID, "author.name", or a
-// dependency entry) into the UID NML compares.
+// dependency entry) into the UID NML compares. It follows NML's C# rule
+// char by char, and C# chars are UTF-16 units: a unit at or below U+0100
+// that isn't a letter or digit becomes '_', anything else is upper-cased,
+// and the halves of a character outside the basic plane are kept as they
+// are (char.ToUpper leaves surrogates alone).
 func Symbol(id string) string {
 	var b strings.Builder
 	for _, r := range id {
+		if r > 0xffff {
+			b.WriteRune(r)
+			continue
+		}
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r <= 256 {
-			b.WriteRune('_')
+			b.WriteByte('_')
 		} else {
 			b.WriteRune(unicode.ToUpper(r))
 		}
@@ -66,39 +75,49 @@ func ReadDeclare(path string) (Declare, error) {
 	if err != nil {
 		return d, err
 	}
-	b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
-	err = json.Unmarshal(b, &d)
+	// NML reads it with Newtonsoft.Json, which accepts comments, trailing
+	// commas and UTF-16; so does this.
+	err = json.Unmarshal(scan.LooseJSON(b), &d)
 	// A field of an unexpected type (targetGameBuild as a string, say)
 	// doesn't stop NML; the rest of the file still counts.
 	var te *json.UnmarshalTypeError
 	if errors.As(err, &te) {
 		err = nil
 	}
-	if err == nil && d.Name == "" {
+	if err == nil && d.Name == "" && d.GUID == "" {
 		err = errors.New("mod.json has no name")
+	}
+	if d.Name == "" {
+		d.Name = d.GUID
 	}
 	return d, err
 }
 
-// FindDeclare returns the mod.json NML would use for a mod folder: the one
-// at its top, else the first found below it.
+// FindDeclare returns the mod.json NML would use for a mod folder: the
+// shallowest one, searching level by level as NML does.
 func FindDeclare(dir string) (string, bool) {
-	top := filepath.Join(dir, DeclFile)
-	if st, err := os.Stat(top); err == nil && !st.IsDir() {
-		return top, true
+	level := []string{dir}
+	for depth := 0; len(level) > 0 && depth < 32; depth++ {
+		var next []string
+		for _, d := range level {
+			es, err := os.ReadDir(d)
+			if err != nil {
+				continue
+			}
+			for _, e := range es {
+				if !e.IsDir() && e.Name() == DeclFile {
+					return filepath.Join(d, e.Name()), true
+				}
+			}
+			for _, e := range es {
+				if e.IsDir() {
+					next = append(next, filepath.Join(d, e.Name()))
+				}
+			}
+		}
+		level = next
 	}
-	found := ""
-	filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
-		if err != nil || found != "" {
-			return filepath.SkipDir
-		}
-		if !e.IsDir() && e.Name() == DeclFile {
-			found = p
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return found, found != ""
+	return "", false
 }
 
 // ModRoots returns the folders inside an unpacked archive that each hold one

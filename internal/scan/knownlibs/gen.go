@@ -1,8 +1,8 @@
 //go:build ignore
 
 // gen downloads the official NuGet packages of libraries that WorldBox
-// mods bundle and writes the SHA-256 of every DLL in them to
-// knownlibs.json. Run from the repository root:
+// mods bundle, and NeoModLoader's GitHub releases, and writes the SHA-256
+// of every DLL in them to knownlibs.json. Run from the repository root:
 //
 //	go run ./internal/scan/knownlibs/gen.go
 package main
@@ -76,6 +76,32 @@ func main() {
 				n++
 			}
 			fmt.Fprintf(os.Stderr, "%s %s: %d dlls\n", p.id, v, n)
+		}
+	}
+	// NeoModLoader's own releases: mod templates bundle a copy of it as a
+	// compile reference, often an old one.
+	var rels []struct {
+		Tag    string `json:"tag_name"`
+		Assets []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := getJSON("https://api.github.com/repos/WorldBoxOpenMods/ModLoader/releases?per_page=100", &rels); err != nil {
+		fail(err)
+	}
+	for _, r := range rels {
+		for _, a := range r.Assets {
+			if a.Name != "NeoModLoader.dll" {
+				continue
+			}
+			b, err := get(a.URL)
+			if err != nil {
+				fail(err)
+			}
+			sum := sha256.Sum256(b)
+			out[hex.EncodeToString(sum[:])] = lib{"NeoModLoader", r.Tag, a.Name}
+			fmt.Fprintf(os.Stderr, "NeoModLoader %s\n", r.Tag)
 		}
 	}
 	keys := make([]string, 0, len(out))

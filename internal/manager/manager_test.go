@@ -1,6 +1,8 @@
 package manager
 
 import (
+	"archive/zip"
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,6 +134,11 @@ func TestFileLine(t *testing.T) {
 		{"powerbox.zip", "powerbox_cfdfc.zip"},
 		{"MyMod_v1.2.zip", "mymod-v2.0.7.7z"},
 		{"modernbox-m5.zip", "modernbox-m5-2.zip"},
+		{"flagbox_v8_13-09-2023.zip", "flagbox_v9_02-11-2023.zip"},
+		{"mod-1-2-3.zip", "mod-1-3-0.zip"},
+		{"Mod (1.2).zip", "Mod (1.3).zip"},
+		{"mod_v1.0b.zip", "mod_v1.1.zip"},
+		{"1.9.zip", "2.0.zip"},
 	}
 	for _, c := range same {
 		if fileLine(c[0]) != fileLine(c[1]) {
@@ -239,5 +246,113 @@ func TestDependencies(t *testing.T) {
 	}
 	if len(md.Clashes) != 1 || md.Clashes[0] != "Optime" {
 		t.Errorf("clashes: %v", md.Clashes)
+	}
+}
+
+func TestWorlds(t *testing.T) {
+	m, gd := fakeGame(t)
+	ws := filepath.Join(gd, "..", "..", "workshop", "content", game.AppID)
+	write(t, filepath.Join(ws, "2686372543", "map.meta"), `{"saveVersion":16,"mapStats":{"name":"Pangaea"}}`)
+	write(t, filepath.Join(ws, "2686372543", "preview.png"), "png")
+	worlds, err := m.Worlds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(worlds) != 1 || worlds[0].Name != "Pangaea" || worlds[0].Preview == "" {
+		t.Errorf("worlds: %+v", worlds)
+	}
+}
+
+// A held mod another enabled mod needs: NML would switch it back on, so
+// the mod that needs it is switched off, and a held mod found on again is
+// switched off again.
+func TestHeldDependency(t *testing.T) {
+	m, gd := fakeGame(t)
+	gameRunning = func() bool { return false }
+	defer func() { gameRunning = game.Running }()
+	write(t, filepath.Join(gd, "Mods", "Lib", "mod.json"), `{"name":"Lib","author":"X"}`)
+	write(t, filepath.Join(gd, "Mods", "Lib", "A.cs"), `class A { string u = "https://discord.com/api/webhooks/1/x"; }`)
+	write(t, filepath.Join(gd, "Mods", "App", "mod.json"), `{"name":"App","author":"X","Dependencies":["X.Lib"]}`)
+	if _, err := m.CheckAll(); err != nil {
+		t.Fatal(err)
+	}
+	off, _ := nml.Disabled(game.NMLDir(gd))
+	if !off["X_LIB"] || !off["X_APP"] {
+		t.Fatalf("off: %v", off)
+	}
+	// Something switches the held mod back on (NML, the in-game window).
+	nml.SetDisabled(game.NMLDir(gd), "X_LIB", false)
+	if held, _ := m.CheckAll(); len(held) != 1 {
+		t.Errorf("re-held: %v", held)
+	}
+	if off, _ := nml.Disabled(game.NMLDir(gd)); !off["X_LIB"] {
+		t.Error("held mod left on")
+	}
+	// Changed files: enabling checks them first.
+	write(t, filepath.Join(gd, "Mods", "Lib", "B.cs"), `class B {}`)
+	if err := m.SetEnabled("X_LIB", true); err == nil {
+		t.Error("a held mod with changed files was switched on unchecked")
+	}
+}
+
+// The window and a command line run share state.json: neither undoes the
+// other. A damaged file is kept aside, not overwritten.
+func TestStateSharedAndDamaged(t *testing.T) {
+	m1, _ := fakeGame(t)
+	m2, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m1.SetUpdates(false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.SetGameDir(""); err != nil {
+		t.Fatal(err)
+	}
+	m3, _ := Open()
+	if c := m3.Config(); !c.NoModUpdates {
+		t.Errorf("one process undid the other's change: %+v", c)
+	}
+
+	p, _ := statePath()
+	os.WriteFile(p, []byte(`{"config":{"noModUpd`), 0o600)
+	m4, err := Open()
+	if err == nil {
+		t.Error("damaged state.json not reported")
+	}
+	if c := m4.Config(); c.NoModUpdates {
+		t.Errorf("damaged file read: %+v", c)
+	}
+	bad, _ := filepath.Glob(p + ".bad-*")
+	if len(bad) != 1 {
+		t.Errorf("damaged file not kept: %v", bad)
+	}
+}
+
+// NML also loads StreamingAssets/mods folders and unpacks zips dropped in
+// Mods: both are checked; a risky zip is renamed so NML skips it.
+func TestOtherPlacesNMLLoads(t *testing.T) {
+	m, gd := fakeGame(t)
+	gameRunning = func() bool { return false }
+	defer func() { gameRunning = game.Running }()
+	write(t, filepath.Join(game.NativeModsDir(gd), "Native", "mod.json"), `{"name":"Native","author":"Y"}`)
+	if md, err := m.Find("Y_NATIVE"); err != nil || md.Source != "native" {
+		t.Errorf("native mod: %+v, %v", md, err)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, _ := zw.Create("Bad/mod.json")
+	w.Write([]byte(`{"name":"Bad","author":"Z"}`))
+	w, _ = zw.Create("Bad/A.cs")
+	w.Write([]byte(`class A { string u = "https://api.telegram.org/bot1/x"; }`))
+	zw.Close()
+	zp := filepath.Join(gd, "Mods", "bad.zip")
+	os.WriteFile(zp, buf.Bytes(), 0o644)
+	held, err := m.CheckAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(zp + ".wbmm-held"); err != nil || len(held) == 0 {
+		t.Errorf("risky zip not held: %v, %v", held, err)
 	}
 }

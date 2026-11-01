@@ -23,8 +23,10 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false
 
+# What GLFW (Fyne's window library) compiles against, nothing more: the
+# xorg-dev metapackage took about four minutes to install.
 env:
-  WINDOW_HEADERS: libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+  WINDOW_HEADERS: libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libxkbcommon-dev libwayland-dev
 
 jobs:
   test:

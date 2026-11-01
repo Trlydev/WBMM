@@ -87,10 +87,20 @@ func (p Pack) Encode() string {
 	return Prefix + base64.RawURLEncoding.EncodeToString(z.Bytes())
 }
 
+// peoplePlaygroundPrefix starts the codes of PPG Mod Manager (ppgmods),
+// wbmm's sister app for People Playground; its files are .ppgm.
+const peoplePlaygroundPrefix = "PPG1."
+
+// ErrPeoplePlayground: the code is a People Playground modpack, for ppgmods.
+var ErrPeoplePlayground = errors.New("this is a People Playground modpack (PPG1. code): open it with PPG Mod Manager, https://github.com/Trlydev/SWG")
+
 // Decode reads a modpack code (or a .wbm file's text). Anything around the
 // code (spaces, line breaks, a chat message) is ignored.
 func Decode(text string) (Pack, error) {
 	i := strings.Index(text, Prefix)
+	if i < 0 && strings.Contains(text, peoplePlaygroundPrefix) {
+		return Pack{}, ErrPeoplePlayground
+	}
 	if i < 0 {
 		return Pack{}, errors.New("this isn't a wbmm modpack (no WBM1. code in it)")
 	}

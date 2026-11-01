@@ -92,6 +92,10 @@ and what it can't fetch (mods installed by hand), and applying it installs
 from GameBanana and the Workshop as always, through the safety check.
 `internal/modpack` has the format.
 
+PPG Mod Manager ([ppgmods](https://github.com/Trlydev/SWG)), the sister app for
+People Playground, has the same kind of code (`PPG1.…`, `.ppgm` files); each app
+recognises the other's codes and says which app opens them.
+
 ## Popularity
 
 Neither site says what's trending, so a daily GitHub Action

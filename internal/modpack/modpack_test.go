@@ -45,3 +45,10 @@ func TestBadCodes(t *testing.T) {
 		}
 	}
 }
+
+// A People Playground code (ppgmods, the sister app) says where it belongs.
+func TestPeoplePlaygroundCode(t *testing.T) {
+	if _, err := Decode("PPG1.y2BgYGIQSCxKz8wrSSzOyczPS8wBAA"); err != ErrPeoplePlayground {
+		t.Fatalf("got %v", err)
+	}
+}

@@ -3,6 +3,7 @@
 package desktop
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -136,7 +137,13 @@ func Refresh() {
 	if !IsInstalled() {
 		return
 	}
-	menu, _, _, _ := paths()
+	menu, _, png, svg := paths()
+	// A new icon comes with an update: replace the old one.
+	if b, err := os.ReadFile(png); err != nil || !bytes.Equal(b, iconPNG) {
+		os.WriteFile(png, iconPNG, 0o644)
+		os.WriteFile(svg, iconSVG, 0o644)
+		exec.Command("gtk-update-icon-cache", "-q", filepath.Join(dataHome(), "icons", "hicolor")).Run()
+	}
 	want := entry(InstallPath())
 	if b, err := os.ReadFile(menu); err == nil && string(b) == want {
 		if _, err := os.Stat(mimePath()); err == nil {

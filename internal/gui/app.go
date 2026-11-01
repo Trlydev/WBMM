@@ -147,7 +147,8 @@ func (u *ui) sidebar() fyne.CanvasObject {
 	p := pal()
 	icon := canvas.NewImageFromResource(fyne.NewStaticResource("wbmm.png", desktop.IconPNG()))
 	icon.FillMode = canvas.ImageFillContain
-	brand := container.NewHBox(fixedSize(icon, 30, 30),
+	icon.ScaleMode = canvas.ImageScalePixels // pixel art: keep the pixels sharp
+	brand := container.NewHBox(fixedSize(icon, 32, 32),
 		container.NewVBox(layout.NewSpacer(), text("WorldBox", p.text, sTitle, true), text("Mod Manager", p.muted, sSmall, false), layout.NewSpacer()))
 
 	play := widget.NewButtonWithIcon("Play WorldBox", theme.MediaPlayIcon(), u.play)

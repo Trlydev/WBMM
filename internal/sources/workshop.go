@@ -48,10 +48,11 @@ func (it WSItem) HasTag(tag string) bool {
 
 // WSSorts maps wbmm's sort names to the Workshop's.
 var WSSorts = map[string]string{
-	"popular": "trend", // trending this week
-	"new":     "mostrecent",
-	"updated": "lastupdated",
-	"subs":    "totaluniquesubscribers", // all-time popularity
+	"popular":   "trend", // trending this week
+	"new":       "mostrecent",
+	"updated":   "lastupdated",
+	"subs":      "totaluniquesubscribers", // all-time popularity
+	"relevance": "textsearch",
 }
 
 // The Workshop browser is a React page with generated class names; the
@@ -73,17 +74,17 @@ func WSBrowseIDs(query, sort, tag string, page int) ([]string, error) {
 	q.Set("section", "readytouseitems")
 	q.Add("requiredtags[]", tag)
 	q.Set("p", fmt.Sprint(page))
+	v, ok := WSSorts[sort]
+	if !ok {
+		v = "totaluniquesubscribers"
+	}
 	if s := strings.TrimSpace(query); s != "" {
 		q.Set("searchtext", s)
-		q.Set("browsesort", "textsearch")
-	} else {
-		v, ok := WSSorts[sort]
-		if !ok {
-			v = "trend"
-		}
-		q.Set("browsesort", v)
-		q.Set("actualsort", v)
+	} else if v == "textsearch" {
+		v = "totaluniquesubscribers" // nothing to rank by relevance
 	}
+	q.Set("browsesort", v)
+	q.Set("actualsort", v)
 	html, err := getText("https://steamcommunity.com/workshop/browse/?"+q.Encode(), 8<<20)
 	if err != nil {
 		return nil, err

@@ -152,7 +152,7 @@ func run(m *manager.Manager, cmd string, args []string) error {
 			fmt.Println("\nWorkshop mods install through Steam: open the item's page and click Subscribe.")
 			return nil
 		}
-		mods, _, err := sources.GBList(q, "popular", 1)
+		mods, _, err := sources.GBList(q, "relevance", false, 1)
 		if err != nil {
 			return err
 		}

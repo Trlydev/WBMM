@@ -47,15 +47,19 @@ selected item's details beside it.
   start**: wbmm reads NeoModLoader's lines in the game's log, so a mod that
   didn't compile or load says why, in plain words ("written for a different
   WorldBox version"), with the compiler's errors.
-- **Get mods:** GameBanana or Steam Workshop mods; search, sort, or paste a
-  link. Select one for its screenshots, description, stats and files.
+- **Get mods:** GameBanana or Steam Workshop mods (worlds and maps live on
+  the Worlds page); search or paste a link. Sort by **Popularity** (today,
+  this week, this month or all time), **Recently updated**, **Newest** or
+  **Relevance** (best match for your search). Select one for its
+  screenshots, description, stats and files.
   - *GameBanana* mods download into `worldbox/Mods`. Mods with several files
     (versions, ports) let you pick one.
   - *Workshop* mods: **Subscribe** subscribes through your Steam client (Steam
     must be running) and shows the download as it happens. Steam keeps the mod
     updated and removes it when you unsubscribe.
-- **Worlds:** Workshop worlds (saved maps), kept apart from mods. See the
-  ones you're subscribed to, or browse and subscribe to more.
+- **Worlds:** worlds and maps, kept apart from mods: the Workshop worlds
+  you're subscribed to, more to browse and subscribe to, and GameBanana's
+  maps (sorted the same way; **Get** opens the map's page).
 - **Modpacks:** save your mods as a modpack, share it, open someone else's.
   Saved packs work as profiles: apply one (optionally switching off what
   isn't in it) to swap sets of mods in one click.
@@ -85,9 +89,10 @@ Neither site says what's trending, so a daily GitHub Action
 (`.github/workflows/popularity.yml`, `cmd/popindex`) records every WorldBox
 mod's GameBanana downloads and Workshop subscriptions (all Workshop mods and
 the 1,500 most subscribed worlds) and publishes the gains over a day, week
-and month to the `popularity-data` branch. "Most downloaded", "Most
-subscribed" and "Trending this week/month" sort by those numbers, and each
-row shows the number it's sorted by. No server, no keys; the branch is
+and month to the `popularity-data` branch. **Popularity** sorts by those
+numbers (all time: total downloads or current subscribers), and each row
+shows the number it's sorted by. Until there's a week or a month of
+history, rows say since when they've been counted. No server, no keys; the branch is
 rewritten each day so it never grows.
 
 ## Safety check

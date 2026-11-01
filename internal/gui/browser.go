@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,10 +42,15 @@ func (c modCard) key() string { return c.Source + ":" + c.ID }
 
 type sortOption struct{ key, label string }
 
+// The sorts every searchable tab offers. Popularity has a second choice,
+// the period; together they make the key "rank:<period>".
+var sorts = []sortOption{{"rank", "Popularity"}, {"updated", "Recently updated"}, {"new", "Newest"}, {"relevance", "Relevance"}}
+var periods = []sortOption{{popularity.Day, "Today"}, {popularity.Week, "This week"}, {popularity.Month, "This month"}, {popularity.AllTime, "All time"}}
+
 // browserSource is one tab of a browser: where its items come from.
 type browserSource struct {
 	key, label string
-	sorts      []sortOption
+	sorted     bool // offers the sorts (a list of what you have doesn't)
 	note       string
 	fetch      func(u *ui, query, sort string, page int) ([]modCard, bool, error)
 }
@@ -57,16 +63,18 @@ type browser struct {
 	sources []browserSource
 	src     int
 
-	srcBtns []*widget.Button
-	search  *widget.Entry
-	sortSel *widget.Select
-	sortBox fyne.CanvasObject
-	note    *widget.Label
-	list    *fyne.Container
-	status  *widget.Label
-	more    *widget.Button
-	scroll  *container.Scroll
-	details *detailsView
+	srcBtns   []*widget.Button
+	search    *widget.Entry
+	sortSel   *widget.Select
+	periodSel *widget.Select
+	sortBox   fyne.CanvasObject
+	periodBox fyne.CanvasObject
+	note      *widget.Label
+	list      *fyne.Container
+	status    *widget.Label
+	more      *widget.Button
+	scroll    *container.Scroll
+	details   *detailsView
 
 	cards    []modCard
 	page     int
@@ -87,11 +95,23 @@ func newBrowser(u *ui, title string, srcs []browserSource) *browser {
 	b.search = widget.NewEntry()
 	b.search.SetPlaceHolder("Search, or paste a link")
 	b.search.OnSubmitted = func(string) { b.load(true) }
-	b.sortSel = widget.NewSelect(nil, func(string) {
+	reload := func(string) {
 		if !b.loading {
 			b.load(true)
 		}
+	}
+	b.sortSel = widget.NewSelect(labels(sorts), func(string) {
+		if b.sortKey() == "" {
+			return
+		}
+		if strings.HasPrefix(b.sortKey(), "rank:") {
+			b.periodBox.Show()
+		} else {
+			b.periodBox.Hide()
+		}
+		reload("")
 	})
+	b.periodSel = widget.NewSelect(labels(periods), reload)
 	b.note = mutedLabel("")
 	b.list = container.NewVBox()
 	b.status = label("")
@@ -101,8 +121,12 @@ func newBrowser(u *ui, title string, srcs []browserSource) *browser {
 	b.scroll = container.NewVScroll(container.NewVBox(b.list, b.status, container.NewCenter(b.more)))
 	b.details = newDetailsView(u)
 
-	b.sortBox = fixedSize(b.sortSel, 180, 36)
-	searchRow := container.NewBorder(nil, nil, nil, b.sortBox, b.search)
+	b.loading = true
+	b.periodSel.SetSelectedIndex(len(periods) - 1) // all time
+	b.loading = false
+	b.sortBox = fixedSize(b.sortSel, 170, 36)
+	b.periodBox = fixedSize(b.periodSel, 130, 36)
+	searchRow := container.NewBorder(nil, nil, nil, container.NewHBox(b.sortBox, b.periodBox), b.search)
 	left := container.NewBorder(container.NewVBox(searchRow, b.note), nil, nil, nil, b.scroll)
 	split := container.NewHSplit(left, b.details.root)
 	split.Offset = 0.56
@@ -123,29 +147,43 @@ func (b *browser) setSource(i int) {
 		btn.Refresh()
 	}
 	b.loading = true
-	var labels []string
-	for _, o := range s.sorts {
-		labels = append(labels, o.label)
-	}
-	b.sortSel.Options = labels
-	if len(labels) > 0 {
-		b.sortSel.SetSelectedIndex(0)
+	if s.sorted {
+		b.sortSel.SetSelectedIndex(0) // popularity
 		b.sortBox.Show()
+		b.periodBox.Show()
 	} else {
 		b.sortBox.Hide()
+		b.periodBox.Hide()
 	}
 	b.loading = false
 	b.note.SetText(s.note)
 	b.load(true)
 }
 
+// sortKey is what the fetchers get: "rank:<period>", "updated", "new" or
+// "relevance"; "" for a tab without sorts.
 func (b *browser) sortKey() string {
-	s := b.sources[b.src]
 	i := b.sortSel.SelectedIndex()
-	if i < 0 || i >= len(s.sorts) {
+	if !b.sources[b.src].sorted || i < 0 {
 		return ""
 	}
-	return s.sorts[i].key
+	k := sorts[i].key
+	if k == "rank" {
+		p := popularity.AllTime
+		if j := b.periodSel.SelectedIndex(); j >= 0 {
+			p = periods[j].key
+		}
+		k += ":" + p
+	}
+	return k
+}
+
+func labels(opts []sortOption) []string {
+	var out []string
+	for _, o := range opts {
+		out = append(out, o.label)
+	}
+	return out
 }
 
 // load fetches a page of items; reset starts over at page 1.
@@ -236,7 +274,9 @@ func (b *browser) row(c modCard, have bool) fyne.CanvasObject {
 	var action fyne.CanvasObject
 	switch {
 	case c.Kind == "map":
-		action = badge("map", p.sea)
+		btn := widget.NewButton("Get", func() { b.u.openURL(c.URL) })
+		btn.Importance = widget.HighImportance
+		action = btn
 	case have && c.Source == "workshop":
 		action = badge("subscribed", p.grass)
 	case have:
@@ -265,13 +305,9 @@ func (b *browser) open(c modCard) {
 
 // ---------- sources ----------
 
-// Sorts by "rank:<period>" come from wbmm's popularity tracker (counted
-// the same way for every item, and shown on the card); the rest are the
-// site's own.
-var gbSorts = []sortOption{{"rank:all", "Most downloaded"}, {"rank:week", "Trending this week"}, {"rank:month", "Trending this month"},
-	{"new", "Newest"}, {"updated", "Recently updated"}, {"liked", "Most liked"}}
-var wsSorts = []sortOption{{"rank:all", "Most subscribed"}, {"rank:week", "Trending this week"}, {"rank:month", "Trending this month"},
-	{"new", "Newest"}, {"updated", "Recently updated"}}
+// Popularity ("rank:<period>") comes from wbmm's popularity tracker (counted
+// the same way for every item, and shown on the card); the other sorts are
+// the site's own.
 
 const pageSize = 30
 
@@ -291,6 +327,13 @@ func fetchRanked(src, kind, q, sort string, page int) (cards []modCard, more, ok
 	if src == "ws" {
 		unit = "subscribers"
 	}
+	when := map[string]string{popularity.Day: "today", popularity.Week: "this week", popularity.Month: "this month"}[period]
+	// Until the tracker has a week or a month of history, it says since when.
+	if need := map[string]int{popularity.Week: 7, popularity.Month: 30}[period]; need > 0 && ix.Days() < need {
+		if d, err := time.Parse("2006-01-02", ix.Since); err == nil {
+			when = "since " + d.Format("Jan 2")
+		}
+	}
 	for _, it := range items {
 		c := modCard{Name: it.Name, Author: it.Author, Thumb: it.Image, URL: it.URL, Category: it.Category,
 			Updated: it.Updated, Likes: it.Likes, Subs: it.Subs, Kind: it.Kind}
@@ -298,52 +341,72 @@ func fetchRanked(src, kind, q, sort string, page int) (cards []modCard, more, ok
 		if src == "ws" {
 			c.Source, c.ID = "workshop", strings.TrimPrefix(it.Ref, "ws:")
 		}
-		switch period {
-		case popularity.AllTime:
+		if when == "" {
 			c.Stat = count(it.Gain(period)) + " " + unit
-		default:
-			c.Stat = fmt.Sprintf("+%s %s this %s · %s total", count(it.Gain(period)), unit, period, count(it.Gain(popularity.AllTime)))
+		} else {
+			c.Stat = fmt.Sprintf("+%s %s %s · %s total", count(it.Gain(period)), unit, when, count(it.Gain(popularity.AllTime)))
 		}
 		cards = append(cards, c)
 	}
 	return cards, more, true
 }
 
-// sortFallback is the site's own sort to use when the index is missing.
-func sortFallback(sort string, workshop bool) string {
-	if !strings.HasPrefix(sort, "rank:") {
-		return sort
-	}
+// siteSort is the site's own sort for a sort key. Popularity without the
+// index is the site's (all time: most downloaded or subscribed; shorter:
+// the Workshop's trending), and relevance needs words to match.
+func siteSort(sort, q string, workshop bool) string {
 	switch {
-	case workshop && sort == "rank:all":
-		return "subs"
-	case workshop:
+	case sort == "relevance" && strings.TrimSpace(q) != "":
+		return sort
+	case sort == "updated", sort == "new":
+		return sort
+	case workshop && sort != "rank:all" && sort != "relevance":
 		return "popular"
+	case workshop:
+		return "subs"
 	}
 	return "popular"
 }
 
-func fetchGameBanana(_ *ui, q, sort string, page int) ([]modCard, bool, error) {
-	if !strings.Contains(q, "gamebanana.com/") {
-		if cards, more, ok := fetchRanked("gb", "", q, sort, page); ok {
-			return cards, more, nil
+// ranked reports whether a fetch should use the popularity index: sorted by
+// popularity, or by relevance with nothing to search for.
+func ranked(sort, q string) (string, bool) {
+	if sort == "relevance" && strings.TrimSpace(q) == "" {
+		return "rank:all", true
+	}
+	return sort, strings.HasPrefix(sort, "rank:")
+}
+
+// fetchGameBanana lists GameBanana mods, or with maps its world maps.
+func fetchGameBanana(maps bool) func(*ui, string, string, int) ([]modCard, bool, error) {
+	kind := "mod"
+	if maps {
+		kind = "map"
+	}
+	return func(_ *ui, q, sort string, page int) ([]modCard, bool, error) {
+		if strings.Contains(q, "gamebanana.com/") {
+			id, ok := sources.ParseGBRef(q)
+			if !ok {
+				return nil, false, errors.New("that isn't a GameBanana mod link")
+			}
+			m, err := sources.GBGetMod(id)
+			if err != nil {
+				return nil, false, err
+			}
+			return []modCard{gbCard(*m)}, false, nil
 		}
-	}
-	sort = sortFallback(sort, false)
-	if strings.Contains(q, "gamebanana.com/mods/") {
-		id, _ := sources.ParseGBRef(q)
-		m, err := sources.GBGetMod(id)
-		if err != nil {
-			return nil, false, err
+		if rs, ok := ranked(sort, q); ok {
+			if cards, more, ok := fetchRanked("gb", kind, q, rs, page); ok {
+				return cards, more, nil
+			}
 		}
-		return []modCard{gbCard(*m)}, false, nil
+		mods, more, err := sources.GBList(q, siteSort(sort, q, false), maps, page)
+		var cards []modCard
+		for _, m := range mods {
+			cards = append(cards, gbCard(m))
+		}
+		return cards, more, err
 	}
-	mods, more, err := sources.GBList(q, sort, page)
-	var cards []modCard
-	for _, m := range mods {
-		cards = append(cards, gbCard(m))
-	}
-	return cards, more, err
 }
 
 func fetchWorkshop(tag string) func(*ui, string, string, int) ([]modCard, bool, error) {
@@ -352,19 +415,18 @@ func fetchWorkshop(tag string) func(*ui, string, string, int) ([]modCard, bool, 
 		kind = "world"
 	}
 	return func(_ *ui, q, sort string, page int) ([]modCard, bool, error) {
-		if _, isLink := sources.ParseWSRef(q); !isLink {
-			if cards, more, ok := fetchRanked("ws", kind, q, sort, page); ok {
-				return cards, more, nil
-			}
-		}
-		sort = sortFallback(sort, true)
 		var items []sources.WSItem
 		var more bool
 		var err error
 		if id, ok := sources.ParseWSRef(q); ok {
 			items, err = sources.WSDetails([]string{id})
 		} else {
-			items, more, err = sources.WSBrowse(q, sort, tag, page)
+			if rs, ok := ranked(sort, q); ok {
+				if cards, more, ok := fetchRanked("ws", kind, q, rs, page); ok {
+					return cards, more, nil
+				}
+			}
+			items, more, err = sources.WSBrowse(q, siteSort(sort, q, true), tag, page)
 		}
 		var cards []modCard
 		for _, it := range items {
@@ -442,9 +504,9 @@ type getModsPage struct{ *browser }
 
 func newGetModsPage(u *ui) *getModsPage {
 	return &getModsPage{newBrowser(u, "Get mods", []browserSource{
-		{key: "gamebanana", label: "GameBanana", sorts: gbSorts, fetch: fetchGameBanana,
-			note: "Installs into your Mods folder after a safety check."},
-		{key: "workshop", label: "Steam Workshop", sorts: wsSorts, fetch: fetchWorkshop(sources.TagMod),
+		{key: "gamebanana", label: "GameBanana", sorted: true, fetch: fetchGameBanana(false),
+			note: "Installs into your Mods folder after a safety check. Worlds are on the Worlds page."},
+		{key: "workshop", label: "Steam Workshop", sorted: true, fetch: fetchWorkshop(sources.TagMod),
 			note: "wbmm subscribes through Steam, follows the download and checks the mod before the game loads it."},
 	})}
 }
@@ -467,8 +529,10 @@ func newWorldsPage(u *ui) *worldsPage {
 	return &worldsPage{newBrowser(u, "Worlds", []browserSource{
 		{key: "subscribed", label: "Subscribed", fetch: fetchSubscribedWorlds,
 			note: "Worlds you're subscribed to. WorldBox lists them in its saves menu; they hold no code."},
-		{key: "workshop", label: "Browse Workshop", sorts: wsSorts, fetch: fetchWorkshop(sources.TagWorld),
+		{key: "workshop", label: "Steam Workshop", sorted: true, fetch: fetchWorkshop(sources.TagWorld),
 			note: "Worlds from the Steam Workshop. Subscribe and Steam downloads them."},
+		{key: "gamebanana", label: "GameBanana", sorted: true, fetch: fetchGameBanana(true),
+			note: "World maps from GameBanana. Get opens the map's page to download it."},
 	})}
 }
 

@@ -83,6 +83,14 @@ func TestScreenshots(t *testing.T) {
 		}
 	})
 	shot("4-worlds", 5*time.Second)
+	fyne.DoAndWait(func() { u.worlds.setSource(2); u.worlds.periodSel.SetSelectedIndex(1) })
+	time.Sleep(7 * time.Second)
+	fyne.DoAndWait(func() {
+		if len(u.worlds.cards) > 0 {
+			u.worlds.open(u.worlds.cards[0])
+		}
+	})
+	shot("4b-worlds-gb", 5*time.Second)
 	fyne.DoAndWait(func() {
 		if pk, err := u.m.ExportPack("My WorldBox"); err == nil {
 			u.packs.opened = &pk // shown, not saved

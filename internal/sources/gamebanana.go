@@ -83,7 +83,7 @@ func (f GBFile) Clean() bool {
 	return f.AVState == "done" && f.AVResult == "clean" && f.Analysis == "ok"
 }
 
-// GBSort values accepted by GBList.
+// GBSort values accepted by GBList ("relevance" is GameBanana's search).
 var GBSorts = map[string]string{
 	"popular": "Generic_MostDownloaded",
 	"new":     "Generic_Newest",
@@ -91,34 +91,51 @@ var GBSorts = map[string]string{
 	"liked":   "Generic_MostLiked",
 }
 
-// GBList lists WorldBox submissions, sorted as asked, optionally only those
-// whose name contains query. When no name matches, it falls back to
-// GameBanana's full-text search (which also reads descriptions but ranks
-// poorly). more reports whether another page exists.
-func GBList(query, sort string, page int) (mods []GBMod, more bool, err error) {
+// GBMapsCategory is WorldBox's "Maps" category: saved worlds, not mods.
+const GBMapsCategory = 23647
+
+// GBList lists WorldBox submissions, sorted as asked: maps only (maps) or
+// everything but maps. With sort "relevance" it is GameBanana's search (best
+// match first, descriptions too); otherwise names containing query. more
+// reports whether another page exists.
+func GBList(query, sort string, maps bool, page int) (mods []GBMod, more bool, err error) {
 	query = strings.TrimSpace(query)
+	keep := func(ms []GBMod) []GBMod {
+		var out []GBMod
+		for _, m := range ms {
+			if m.IsMap() == maps {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	if sort == "relevance" && query != "" {
+		q := url.Values{}
+		q.Set("_nPage", fmt.Sprint(page))
+		q.Set("_sModelName", "Mod")
+		q.Set("_sOrder", "best_match")
+		q.Set("_idGameRow", fmt.Sprint(GBGameID))
+		q.Set("_sSearchString", query)
+		mods, more, err = gbRecords(gbAPI + "/Util/Search/Results?" + q.Encode())
+		return keep(mods), more, err
+	}
 	q := url.Values{}
 	q.Set("_nPage", fmt.Sprint(page))
 	q.Set("_nPerpage", "30")
 	q.Set("_aFilters[Generic_Game]", fmt.Sprint(GBGameID))
-	if v, ok := GBSorts[sort]; ok {
-		q.Set("_sSort", v)
+	if maps {
+		q.Set("_aFilters[Generic_Category]", fmt.Sprint(GBMapsCategory))
 	}
+	v, ok := GBSorts[sort]
+	if !ok {
+		v = GBSorts["popular"]
+	}
+	q.Set("_sSort", v)
 	if query != "" {
 		q.Set("_aFilters[Generic_Name]", "contains,"+query)
 	}
 	mods, more, err = gbRecords(gbAPI + "/Mod/Index?" + q.Encode())
-	if err != nil || len(mods) > 0 || query == "" || page > 1 {
-		return mods, more, err
-	}
-	q = url.Values{}
-	q.Set("_nPage", fmt.Sprint(page))
-	q.Set("_sModelName", "Mod")
-	q.Set("_sOrder", "best_match")
-	q.Set("_idGameRow", fmt.Sprint(GBGameID))
-	q.Set("_sSearchString", query)
-	mods, _, err = gbRecords(gbAPI + "/Util/Search/Results?" + q.Encode())
-	return mods, false, err
+	return keep(mods), more, err
 }
 
 func gbRecords(u string) (mods []GBMod, more bool, err error) {

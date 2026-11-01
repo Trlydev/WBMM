@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/Trlydev/WBMM/internal/popularity"
 	"github.com/Trlydev/WBMM/internal/sources"
 )
 
@@ -31,6 +32,9 @@ type modCard struct {
 	Likes    int
 	Views    int
 	Subs     int
+	// Stat is the number the list is sorted by, in words ("568k downloads",
+	// "+340 subscribers this week"); empty: the source's own numbers.
+	Stat string
 }
 
 func (c modCard) key() string { return c.Source + ":" + c.ID }
@@ -216,10 +220,12 @@ func (b *browser) row(c modCard, have bool) fyne.CanvasObject {
 	if u := ago(c.Updated); u != "" {
 		meta = append(meta, u)
 	}
-	var stats string
-	if c.Source == "workshop" {
+	stats := c.Stat
+	switch {
+	case stats != "":
+	case c.Source == "workshop":
 		stats = count(c.Subs) + " subscribers"
-	} else {
+	default:
 		stats = fmt.Sprintf("%s likes · %s views", count(c.Likes), count(c.Views))
 	}
 	text := tight(
@@ -259,10 +265,71 @@ func (b *browser) open(c modCard) {
 
 // ---------- sources ----------
 
-var gbSorts = []sortOption{{"popular", "Most downloaded"}, {"new", "Newest"}, {"updated", "Recently updated"}, {"liked", "Most liked"}}
-var wsSorts = []sortOption{{"subs", "Most subscribed"}, {"popular", "Trending this week"}, {"new", "Newest"}, {"updated", "Recently updated"}}
+// Sorts by "rank:<period>" come from wbmm's popularity tracker (counted
+// the same way for every item, and shown on the card); the rest are the
+// site's own.
+var gbSorts = []sortOption{{"rank:all", "Most downloaded"}, {"rank:week", "Trending this week"}, {"rank:month", "Trending this month"},
+	{"new", "Newest"}, {"updated", "Recently updated"}, {"liked", "Most liked"}}
+var wsSorts = []sortOption{{"rank:all", "Most subscribed"}, {"rank:week", "Trending this week"}, {"rank:month", "Trending this month"},
+	{"new", "Newest"}, {"updated", "Recently updated"}}
+
+const pageSize = 30
+
+// fetchRanked lists items from the popularity index. ok is false when there
+// is no index (offline, or not published yet): the caller asks the site.
+func fetchRanked(src, kind, q, sort string, page int) (cards []modCard, more, ok bool) {
+	period, isRank := strings.CutPrefix(sort, "rank:")
+	if !isRank {
+		return nil, false, false
+	}
+	ix, err := popularity.Fetch()
+	if err != nil {
+		return nil, false, false
+	}
+	items, more := ix.Query(src, kind, q, period, (page-1)*pageSize, pageSize)
+	unit := "downloads"
+	if src == "ws" {
+		unit = "subscribers"
+	}
+	for _, it := range items {
+		c := modCard{Name: it.Name, Author: it.Author, Thumb: it.Image, URL: it.URL, Category: it.Category,
+			Updated: it.Updated, Likes: it.Likes, Subs: it.Subs, Kind: it.Kind}
+		c.Source, c.ID = "gamebanana", strings.TrimPrefix(it.Ref, "gb:")
+		if src == "ws" {
+			c.Source, c.ID = "workshop", strings.TrimPrefix(it.Ref, "ws:")
+		}
+		switch period {
+		case popularity.AllTime:
+			c.Stat = count(it.Gain(period)) + " " + unit
+		default:
+			c.Stat = fmt.Sprintf("+%s %s this %s · %s total", count(it.Gain(period)), unit, period, count(it.Gain(popularity.AllTime)))
+		}
+		cards = append(cards, c)
+	}
+	return cards, more, true
+}
+
+// sortFallback is the site's own sort to use when the index is missing.
+func sortFallback(sort string, workshop bool) string {
+	if !strings.HasPrefix(sort, "rank:") {
+		return sort
+	}
+	switch {
+	case workshop && sort == "rank:all":
+		return "subs"
+	case workshop:
+		return "popular"
+	}
+	return "popular"
+}
 
 func fetchGameBanana(_ *ui, q, sort string, page int) ([]modCard, bool, error) {
+	if !strings.Contains(q, "gamebanana.com/") {
+		if cards, more, ok := fetchRanked("gb", "", q, sort, page); ok {
+			return cards, more, nil
+		}
+	}
+	sort = sortFallback(sort, false)
 	if strings.Contains(q, "gamebanana.com/mods/") {
 		id, _ := sources.ParseGBRef(q)
 		m, err := sources.GBGetMod(id)
@@ -280,7 +347,17 @@ func fetchGameBanana(_ *ui, q, sort string, page int) ([]modCard, bool, error) {
 }
 
 func fetchWorkshop(tag string) func(*ui, string, string, int) ([]modCard, bool, error) {
+	kind := "mod"
+	if tag == sources.TagWorld {
+		kind = "world"
+	}
 	return func(_ *ui, q, sort string, page int) ([]modCard, bool, error) {
+		if _, isLink := sources.ParseWSRef(q); !isLink {
+			if cards, more, ok := fetchRanked("ws", kind, q, sort, page); ok {
+				return cards, more, nil
+			}
+		}
+		sort = sortFallback(sort, true)
 		var items []sources.WSItem
 		var more bool
 		var err error

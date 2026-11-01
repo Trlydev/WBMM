@@ -19,6 +19,7 @@ import (
 	"github.com/Trlydev/WBMM/internal/desktop"
 	"github.com/Trlydev/WBMM/internal/gui"
 	"github.com/Trlydev/WBMM/internal/manager"
+	"github.com/Trlydev/WBMM/internal/modpack"
 	"github.com/Trlydev/WBMM/internal/nml"
 	"github.com/Trlydev/WBMM/internal/scan"
 	"github.com/Trlydev/WBMM/internal/selfupdate"
@@ -45,6 +46,9 @@ Usage:
   wbmm scan PATH [-json]        check a mod folder or archive for malware patterns
   wbmm check                    check every installed mod; hold risky ones
   wbmm accept UID|ws:ID         allow a mod the safety check holds
+  wbmm pack save NAME [FILE]    save the installed mods as a modpack (.wbm)
+  wbmm pack apply FILE|CODE [-only]  install a modpack (-only: switch off the rest)
+  wbmm FILE.wbm                 open a modpack in the window
   wbmm self-update              update wbmm to the newest release
   wbmm install-app [no-desktop] install as an app (menu entry, shortcut)
   wbmm uninstall-app            remove the app (mods and settings stay)
@@ -69,9 +73,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "warning: couldn't read wbmm's settings:", err)
 	}
+	// Opening a .wbm file starts wbmm with its path.
+	openPack := ""
+	if len(args) == 1 && strings.EqualFold(filepath.Ext(args[0]), modpack.Ext) {
+		openPack, args = args[0], nil
+	}
 	if len(args) == 0 || args[0] == "gui" {
 		setupLog()
-		if err := gui.Run(m, version); err != nil {
+		if err := gui.Run(m, version, openPack); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -258,6 +267,58 @@ func run(m *manager.Manager, cmd string, args []string) error {
 				loc = fmt.Sprintf("%s:%d", f.File, f.Line)
 			}
 			fmt.Printf("%-8s %-22s %s  %s\n", f.Severity, f.Rule, loc, f.Detail)
+		}
+
+	case "pack":
+		if len(args) < 1 {
+			return errors.New("usage: wbmm pack save NAME [FILE] | wbmm pack apply FILE|CODE [-only]")
+		}
+		switch args[0] {
+		case "save":
+			if len(args) < 2 {
+				return errors.New("usage: wbmm pack save NAME [FILE]")
+			}
+			pk, err := m.ExportPack(args[1])
+			if err != nil {
+				return err
+			}
+			path := ""
+			if len(args) > 2 {
+				path = args[2]
+				err = manager.WritePackFile(path, pk)
+			} else {
+				path, err = manager.SavePack(pk)
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s (%d mods) saved to %s\n\n%s\n", pk.Name, len(pk.Entries), path, pk.Encode())
+		case "apply":
+			only := len(args) > 2 && strings.TrimLeft(args[2], "-") == "only"
+			if len(args) < 2 {
+				return errors.New("usage: wbmm pack apply FILE|CODE [-only]")
+			}
+			var pk modpack.Pack
+			var err error
+			if strings.Contains(args[1], modpack.Prefix) {
+				pk, err = modpack.Decode(args[1])
+			} else {
+				pk, err = manager.ReadPackFile(args[1])
+			}
+			if err != nil {
+				return err
+			}
+			steps, err := m.PlanPack(pk, only)
+			if err != nil {
+				return err
+			}
+			errs := m.ApplyPack(steps, func(s string) { fmt.Println(s) })
+			for _, e := range errs {
+				fmt.Println("  not done:", e)
+			}
+			fmt.Printf("Applied %s.\n", pk.Name)
+		default:
+			return fmt.Errorf("unknown pack command %q", args[0])
 		}
 
 	case "self-update":

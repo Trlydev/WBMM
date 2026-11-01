@@ -2,6 +2,8 @@ package gui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 
 	"github.com/Trlydev/WBMM/internal/game"
 	"github.com/Trlydev/WBMM/internal/manager"
+	"github.com/Trlydev/WBMM/internal/nml"
 )
 
 // myModsPage is the installed mods: one list with a switch per mod, and
@@ -27,6 +30,7 @@ type myModsPage struct {
 	mods    []manager.Mod
 	updates map[string]manager.Update
 	err     error
+	lastRun *nml.GameLog // what NeoModLoader said at the last game start
 
 	selected string // mod folder
 }
@@ -59,8 +63,9 @@ func (v *myModsPage) reload() {
 	go func() {
 		mods, err := v.u.m.List()
 		sort.SliceStable(mods, func(i, j int) bool { return strings.ToLower(mods[i].Name) < strings.ToLower(mods[j].Name) })
+		lastRun, _ := v.u.m.LastRun()
 		fyne.Do(func() {
-			v.mods, v.err = mods, err
+			v.mods, v.err, v.lastRun = mods, err, lastRun
 			if len(mods) > 0 {
 				v.u.nav[pageMine].setCount(fmt.Sprint(len(mods)))
 			} else {
@@ -160,9 +165,12 @@ func (v *myModsPage) row(md manager.Mod) fyne.CanvasObject {
 
 	badges := container.NewHBox()
 	verdict, current := u.m.Verdict(md.Folder)
+	run := v.runResult(md)
 	switch {
 	case current && verdict.Blocked():
 		badges.Add(badge("held", p.bad))
+	case run.failed:
+		badges.Add(badge("didn't load", p.bad))
 	case md.Problem != "" || len(md.Needs) > 0 || len(md.Clashes) > 0:
 		badges.Add(badge("check", p.warn))
 	case current && verdict.Max >= 2 && !verdict.Accepted:
@@ -298,7 +306,37 @@ func (v *myModsPage) paintPanel() {
 	if strings.TrimSpace(desc) == "" {
 		desc = "No description in its mod.json."
 	}
+	run := v.runResult(*md)
+	runBox := container.NewVBox()
+	switch {
+	case !run.known:
+		runBox.Add(mutedLabel("No game start since it was installed or changed."))
+	case run.failed:
+		for _, pr := range run.problems {
+			l := label(pr.Summary)
+			l.Importance = widget.DangerImportance
+			runBox.Add(l)
+			if len(pr.Details) > 0 {
+				d := widget.NewLabel(strings.Join(pr.Details, "\n"))
+				d.Wrapping = fyne.TextWrapBreak
+				d.TextStyle.Monospace = true
+				d.SizeName = sSmall
+				runBox.Add(tint(d, withAlpha(p.text, 0x0a)))
+			}
+		}
+	case run.loaded:
+		runBox.Add(badge("loaded", p.grass))
+	case md.Enabled:
+		runBox.Add(mutedLabel("NeoModLoader didn't mention it: it may not have loaded."))
+	default:
+		runBox.Add(mutedLabel("Switched off at that start."))
+	}
+	runTitle := "Last game start"
+	if v.lastRun != nil {
+		runTitle += " (" + v.lastRun.Time.Format("Jan 2, 15:04") + ")"
+	}
 	body := container.NewVBox(head, acts, status,
+		section2(runTitle, runBox),
 		section2("Safety check", safety),
 		section2("About", label(desc)),
 		section2("Folder", mutedLabel(md.Folder)))
@@ -315,4 +353,29 @@ func cardFromMod(md manager.Mod) (modCard, bool) {
 		return modCard{Source: "workshop", Kind: "mod", ID: md.WorkshopID, Name: md.Name, Author: md.Author, URL: md.URL}, true
 	}
 	return modCard{}, false
+}
+
+// runInfo is what the last game start said about one mod.
+type runInfo struct {
+	known, loaded, failed bool
+	problems              []nml.LogProblem
+}
+
+// runResult reads the last game start for md, unless the mod changed since
+// (the log is about older files then).
+func (v *myModsPage) runResult(md manager.Mod) runInfo {
+	gl := v.lastRun
+	if gl == nil || !gl.NML {
+		return runInfo{}
+	}
+	if fi, err := os.Stat(filepath.Join(md.Folder, nml.DeclFile)); err == nil && fi.ModTime().After(gl.Time) {
+		return runInfo{}
+	}
+	r := runInfo{known: true, loaded: gl.Loaded[md.Name], problems: gl.ProblemsFor(md.UID, md.Name)}
+	for _, pr := range r.problems {
+		if pr.Kind != "outdated" {
+			r.failed = true
+		}
+	}
+	return r
 }

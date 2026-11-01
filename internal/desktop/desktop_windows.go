@@ -92,7 +92,35 @@ func Install(o Options, logf func(string, ...any)) (string, error) {
 	regSet("URLInfoAbout", "REG_SZ", "https://github.com/Trlydev/WBMM")
 	regSet("NoModify", "REG_DWORD", "1")
 	regSet("NoRepair", "REG_DWORD", "1")
+	registerModpacks(exe)
+	logf("registered .wbm modpack files")
 	return exe, nil
+}
+
+const modpackClass = "WBMM.Modpack"
+
+// registerModpacks makes .wbm files (wbmm modpacks) open in wbmm.
+func registerModpacks(exe string) {
+	for _, a := range [][]string{
+		{`HKCU\Software\Classes\.wbm`, "/ve", "/d", modpackClass},
+		{`HKCU\Software\Classes\` + modpackClass, "/ve", "/d", "WorldBox Mod Manager modpack"},
+		{`HKCU\Software\Classes\` + modpackClass + `\DefaultIcon`, "/ve", "/d", exe + ",0"},
+		{`HKCU\Software\Classes\` + modpackClass + `\shell\open\command`, "/ve", "/d", `"` + exe + `" "%1"`},
+	} {
+		hidden("reg", append([]string{"add", a[0]}, append(a[1:], "/f")...)...).Run()
+	}
+}
+
+// Refresh brings an installed copy's file types up to date (an update may
+// have added some): run at start by the installed copy.
+func Refresh() {
+	if !IsInstalled() {
+		return
+	}
+	if hidden("reg", "query", `HKCU\Software\Classes\`+modpackClass+`\shell\open\command`).Run() == nil {
+		return
+	}
+	registerModpacks(InstallPath())
 }
 
 // Uninstall removes the shortcuts, the Apps & features entry and the program
@@ -105,6 +133,8 @@ func Uninstall(logf func(string, ...any)) error {
 		}
 	}
 	hidden("reg", "delete", uninstallKey, "/f").Run()
+	hidden("reg", "delete", `HKCU\Software\Classes\.wbm`, "/f").Run()
+	hidden("reg", "delete", `HKCU\Software\Classes\`+modpackClass, "/f").Run()
 	dir := installDir()
 	if strings.EqualFold(filepath.Dir(Executable()), dir) {
 		// Windows cannot delete a running program: let cmd do it after we exit.

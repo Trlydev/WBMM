@@ -43,7 +43,10 @@ selected item's details beside it.
 - **My mods:** every mod NeoModLoader will load (the Mods folder, the game's
   own mods folder and the Workshop) with an on/off switch each. Select one for
   its safety check result, missing requirements or clashes, updates, its
-  folder, and Remove or Unsubscribe.
+  folder, and Remove or Unsubscribe, and **what happened at the last game
+  start**: wbmm reads NeoModLoader's lines in the game's log, so a mod that
+  didn't compile or load says why, in plain words ("written for a different
+  WorldBox version"), with the compiler's errors.
 - **Get mods:** GameBanana or Steam Workshop mods; search, sort, or paste a
   link. Select one for its screenshots, description, stats and files.
   - *GameBanana* mods download into `worldbox/Mods`. Mods with several files
@@ -53,12 +56,39 @@ selected item's details beside it.
     updated and removes it when you unsubscribe.
 - **Worlds:** Workshop worlds (saved maps), kept apart from mods. See the
   ones you're subscribed to, or browse and subscribe to more.
+- **Modpacks:** save your mods as a modpack, share it, open someone else's.
+  Saved packs work as profiles: apply one (optionally switching off what
+  isn't in it) to swap sets of mods in one click.
 - **Settings:** NeoModLoader, the game folder, automatic updates, and the app
   install.
 
 The first time, turn on **Experimental Mode** in WorldBox's settings, or mods
 won't load. Switch mods on and off with WorldBox closed: NeoModLoader keeps its
 mod list in memory while the game runs.
+
+## Modpacks (.wbm)
+
+A modpack is one short line of text, like
+`WBM1.4vatVAjPL8pJccqvYOL4M1Pm8pMCTt_8lNSiPKf8Csapa7vP87D5F5Rk5qYCBgA` (two
+mods; twenty take about 300 characters): small enough to paste into a chat.
+Saved as a file it's a `.wbm`, and the installed app opens `.wbm` files on a
+double-click. Inside, compressed: each mod's source (GameBanana or the
+Workshop), its ID there, which file, whether it's on, and its name. No
+URLs and no code: opening one shows what it would install, switch on or off,
+and what it can't fetch (mods installed by hand), and applying it installs
+from GameBanana and the Workshop as always, through the safety check.
+`internal/modpack` has the format.
+
+## Popularity
+
+Neither site says what's trending, so a daily GitHub Action
+(`.github/workflows/popularity.yml`, `cmd/popindex`) records every WorldBox
+mod's GameBanana downloads and Workshop subscriptions (all Workshop mods and
+the 1,500 most subscribed worlds) and publishes the gains over a day, week
+and month to the `popularity-data` branch. "Most downloaded", "Most
+subscribed" and "Trending this week/month" sort by those numbers, and each
+row shows the number it's sorted by. No server, no keys; the branch is
+rewritten each day so it never grows.
 
 ## Safety check
 
@@ -101,7 +131,7 @@ serious. The tests use harmless samples that only name what malware does.
 
 ## Updates
 
-Both are on by default and can be turned off in Setup.
+All are on by default and can be turned off in Settings.
 
 - **wbmm updates itself.** It checks GitHub at start and every six hours,
   downloads the new build, checks it against the release's `SHA256SUMS.txt`
@@ -113,6 +143,9 @@ Both are on by default and can be turned off in Setup.
   installs when GameBanana's virus scan passed it. Anything held back shows an
   **Update** button under Installed. `wbmm updates -yes` does it from a
   terminal.
+- **NeoModLoader updates itself**, same schedule, with WorldBox closed. The
+  version it replaces is kept: if mods break, Settings goes back to it, and
+  that release is then skipped until a newer one comes out.
 - **Workshop mods** are updated by Steam.
 
 ## How it works
@@ -145,6 +178,8 @@ wbmm updates [-yes]
 wbmm nml [install]
 wbmm scan ./SomeMod.zip        # safety check a folder or archive
 wbmm check                     # check every installed mod; hold risky ones
+wbmm pack save "Modern war"    # save the installed mods as a modpack
+wbmm pack apply war.wbm -only  # install a modpack (-only: switch off the rest)
 wbmm self-update
 ```
 
@@ -159,7 +194,7 @@ WBMM_LIVE=1 go test ./internal/nml                    # downloads the real NeoMo
 WBMM_SHOTS=/tmp/shots go test -run Screenshots ./internal/gui   # renders each screen
 ```
 
-Every push to `main` publishes a release, `v0.2.<n>`: one Linux job builds
+Every push to `main` publishes a release, `v0.3.<n>`: one Linux job builds
 both programs (Windows with MinGW) with a cached build, beside the tests, in
 about a minute; checksums are signed with the release key.
 

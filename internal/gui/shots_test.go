@@ -83,6 +83,13 @@ func TestScreenshots(t *testing.T) {
 		}
 	})
 	shot("4-worlds", 5*time.Second)
+	fyne.DoAndWait(func() {
+		if pk, err := u.m.ExportPack("My WorldBox"); err == nil {
+			u.packs.opened = &pk // shown, not saved
+		}
+		u.show(pageModpacks)
+	})
+	shot("5-modpacks", 4*time.Second)
 	fyne.DoAndWait(func() { u.show(pageSettings) })
-	shot("5-settings", 2*time.Second)
+	shot("6-settings", 2*time.Second)
 }

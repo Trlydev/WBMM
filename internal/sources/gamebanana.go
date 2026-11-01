@@ -226,3 +226,48 @@ func GBGetProfile(id int) (*GBProfile, error) {
 	}
 	return &p, nil
 }
+
+// GBAll lists every WorldBox submission (newest first).
+func GBAll() ([]GBMod, error) {
+	var all []GBMod
+	for page := 1; page <= 200; page++ {
+		q := url.Values{}
+		q.Set("_nPage", fmt.Sprint(page))
+		q.Set("_nPerpage", "50")
+		q.Set("_aFilters[Generic_Game]", fmt.Sprint(GBGameID))
+		q.Set("_sSort", "Generic_Newest")
+		mods, more, err := gbRecords(gbAPI + "/Mod/Index?" + q.Encode())
+		if err != nil {
+			return all, err
+		}
+		all = append(all, mods...)
+		if !more {
+			break
+		}
+	}
+	return all, nil
+}
+
+// GBDownloads returns the download counts of mods, 50 per request.
+func GBDownloads(ids []int) (map[int]int, error) {
+	out := map[int]int{}
+	for i := 0; i < len(ids); i += 50 {
+		batch := ids[i:min(i+50, len(ids))]
+		var csv []string
+		for _, id := range batch {
+			csv = append(csv, fmt.Sprint(id))
+		}
+		var rows []struct {
+			ID        int `json:"_idRow"`
+			Downloads int `json:"_nDownloadCount"`
+		}
+		u := fmt.Sprintf("%s/Mod/Multi?_csvRowIds=%s&_csvProperties=_idRow,_nDownloadCount", gbAPI, strings.Join(csv, ","))
+		if err := getJSON(u, &rows); err != nil {
+			return out, err
+		}
+		for _, r := range rows {
+			out[r.ID] = r.Downloads
+		}
+	}
+	return out, nil
+}

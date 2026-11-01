@@ -33,9 +33,9 @@ func instanceFile() string {
 	return filepath.Join(d, "instance.json")
 }
 
-// forwardToRunning asks a running window to show itself. It reports
-// whether one answered.
-func forwardToRunning() bool {
+// forwardToRunning asks a running window to show itself (and open pack, a
+// .wbm file, if not ""). It reports whether one answered.
+func forwardToRunning(pack string) bool {
 	b, err := os.ReadFile(instanceFile())
 	if err != nil {
 		return false
@@ -50,7 +50,10 @@ func forwardToRunning() bool {
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := c.Write([]byte(in.Key + "\n")); err != nil {
+	if abs, err := filepath.Abs(pack); err == nil && pack != "" {
+		pack = abs
+	}
+	if _, err := c.Write([]byte(in.Key + "\n" + strings.ReplaceAll(pack, "\n", "") + "\n")); err != nil {
 		return false
 	}
 	reply, _ := bufio.NewReader(c).ReadString('\n')
@@ -62,8 +65,9 @@ var (
 	listener net.Listener
 )
 
-// listenForOthers starts answering later starts; show is called for each.
-func listenForOthers(show func()) (stop func()) {
+// listenForOthers starts answering later starts; show is called for each,
+// with the .wbm file it was started with ("" if none).
+func listenForOthers(show func(pack string)) (stop func()) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return func() {}
@@ -85,10 +89,12 @@ func listenForOthers(show func()) (stop func()) {
 			go func() {
 				defer c.Close()
 				c.SetDeadline(time.Now().Add(2 * time.Second))
-				got, _ := bufio.NewReader(c).ReadString('\n')
+				r := bufio.NewReader(c)
+				got, _ := r.ReadString('\n')
 				if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(got)), []byte(key)) == 1 {
+					pack, _ := r.ReadString('\n')
 					c.Write([]byte("ok\n"))
-					show()
+					show(strings.TrimSpace(pack))
 				}
 			}()
 		}

@@ -130,9 +130,9 @@ func (m *Manager) Config() Config {
 }
 
 // SetUpdates saves the automatic update settings.
-func (m *Manager) SetUpdates(mods, app bool) error {
+func (m *Manager) SetUpdates(mods, app, loader bool) error {
 	return m.update(func(st *state) {
-		st.Config.NoModUpdates, st.Config.NoAppUpdates = !mods, !app
+		st.Config.NoModUpdates, st.Config.NoAppUpdates, st.Config.NoNMLUpdates = !mods, !app, !loader
 	})
 }
 
@@ -558,6 +558,16 @@ func (m *Manager) ScanOptions() scan.Options {
 	return scan.Options{GameManaged: game.ManagedDir(gd)}
 }
 
+// LastRun reads what NeoModLoader wrote about mods the last time the game
+// started.
+func (m *Manager) LastRun() (*nml.GameLog, error) {
+	gd, err := m.GameDir()
+	if err != nil {
+		return nil, err
+	}
+	return nml.ReadLastRun(gd)
+}
+
 // LoaderStatus reports the NeoModLoader install.
 func (m *Manager) LoaderStatus() (nml.LoaderStatus, error) {
 	gd, err := m.GameDir()
@@ -565,6 +575,45 @@ func (m *Manager) LoaderStatus() (nml.LoaderStatus, error) {
 		return nml.LoaderStatus{}, err
 	}
 	return nml.Status(game.NativeModsDir(gd)), nil
+}
+
+// RestoreLoader goes back to the NeoModLoader version the last update
+// replaced.
+func (m *Manager) RestoreLoader() error {
+	if gameRunning() {
+		return errors.New("close WorldBox first")
+	}
+	gd, err := m.GameDir()
+	if err != nil {
+		return err
+	}
+	st := nml.Status(game.NativeModsDir(gd))
+	if err := nml.Restore(game.NativeModsDir(gd)); err != nil {
+		return err
+	}
+	// Don't update straight back to the version just undone.
+	return m.update(func(s *state) { s.Config.SkipNML = st.LatestSHA })
+}
+
+// AutoUpdateLoader updates NeoModLoader if a newer release is out, it is
+// installed, the game is closed, and the person didn't go back from that
+// release. It returns the release installed ("" if none).
+func (m *Manager) AutoUpdateLoader() (string, error) {
+	cfg := m.Config()
+	if cfg.NoNMLUpdates || gameRunning() {
+		return "", nil
+	}
+	st, err := m.LoaderStatus()
+	if err != nil || !st.Installed || st.UpToDate || st.CheckError != "" || st.LatestSHA == "" || st.LatestSHA == cfg.SkipNML {
+		return "", err
+	}
+	return m.InstallLoader()
+}
+
+// LoaderBackup reports whether there's a previous NeoModLoader to go back to.
+func (m *Manager) LoaderBackup() bool {
+	gd, err := m.GameDir()
+	return err == nil && nml.HasBackup(game.NativeModsDir(gd))
 }
 
 // InstallLoader installs or updates NeoModLoader.

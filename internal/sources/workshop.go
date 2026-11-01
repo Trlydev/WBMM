@@ -22,6 +22,7 @@ type WSItem struct {
 	Created     int64  `json:"time_created"`
 	Updated     int64  `json:"time_updated"`
 	Subs        int    `json:"subscriptions"`
+	LifetimeSub int    `json:"lifetime_subscriptions"`
 	Favorited   int    `json:"favorited"`
 	Views       int    `json:"views"`
 	Creator     string `json:"creator"`
@@ -154,4 +155,42 @@ func ParseWSRef(s string) (string, bool) {
 		return m[1], true
 	}
 	return "", false
+}
+
+// WSAllIDs lists the IDs of Workshop items with tag, most subscribed
+// first, reading at most maxPages pages of 30.
+func WSAllIDs(tag string, maxPages int) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for page := 1; page <= maxPages; page++ {
+		ids, err := WSBrowseIDs("", "subs", tag, page)
+		if err != nil {
+			return out, err
+		}
+		n := 0
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+				n++
+			}
+		}
+		if len(ids) < 30 || n == 0 {
+			break
+		}
+	}
+	return out, nil
+}
+
+// WSDetailsAll is WSDetails for any number of IDs (100 per request).
+func WSDetailsAll(ids []string) ([]WSItem, error) {
+	var out []WSItem
+	for i := 0; i < len(ids); i += 100 {
+		items, err := WSDetails(ids[i:min(i+100, len(ids))])
+		if err != nil {
+			return out, err
+		}
+		out = append(out, items...)
+	}
+	return out, nil
 }

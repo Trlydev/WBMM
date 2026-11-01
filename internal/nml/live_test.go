@@ -27,9 +27,22 @@ func TestLiveInstall(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "NeoModLoader.pdb")); err != nil {
 		t.Error(err)
 	}
-	// A changed DLL is no longer up to date.
+	// A changed DLL is no longer up to date; installing again keeps it as
+	// the previous version, and Restore brings it back.
 	os.WriteFile(filepath.Join(dir, DLLName), []byte("x"), 0o644)
 	if Status(dir).UpToDate {
 		t.Error("tampered DLL reported up to date")
+	}
+	if _, err := Install(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !HasBackup(dir) {
+		t.Fatal("no backup kept")
+	}
+	if err := Restore(dir); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, DLLName)); string(b) != "x" {
+		t.Error("Restore didn't bring back the previous version")
 	}
 }

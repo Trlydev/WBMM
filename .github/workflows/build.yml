@@ -1,7 +1,7 @@
 name: build
 
-# Every push to main publishes a new release, v0.2.<patch>: the patch is one
-# more than the newest v0.2.* tag. Pushing a tag like v1.2.3 publishes that
+# Every push to main publishes a new release, v0.3.<patch>: the patch is one
+# more than the newest v0.3.* tag (0.3 began with modpacks). Pushing a tag like v1.2.3 publishes that
 # exact version instead. Pull requests and manual runs only test and build.
 #
 # Speed: one Linux job builds both programs (Windows with MinGW; Windows
@@ -78,9 +78,9 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
             v="${GITHUB_REF_NAME}"
           elif [ "${GITHUB_REF}" = refs/heads/main ] && [ "${GITHUB_EVENT_NAME}" = push ]; then
-            last=$(git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v0.2.*' \
-              | grep -oE 'v0\.2\.[0-9]+' | cut -d. -f3 | sort -n | tail -1)
-            v="v0.2.$(( ${last:--1} + 1 ))"
+            last=$(git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" 'refs/tags/v0.3.*' \
+              | grep -oE 'v0\.3\.[0-9]+' | cut -d. -f3 | sort -n | tail -1)
+            v="v0.3.$(( ${last:--1} + 1 ))"
           else
             v="v0.0.0-dev.${GITHUB_RUN_NUMBER}"
           fi

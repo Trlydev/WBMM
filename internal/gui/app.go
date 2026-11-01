@@ -29,6 +29,7 @@ import (
 	"github.com/Trlydev/WBMM/internal/game"
 	"github.com/Trlydev/WBMM/internal/manager"
 	"github.com/Trlydev/WBMM/internal/nml"
+	"github.com/Trlydev/WBMM/internal/popularity"
 	"github.com/Trlydev/WBMM/internal/selfupdate"
 )
 
@@ -65,6 +66,7 @@ type ui struct {
 	mine   *myModsPage
 	get    *getModsPage
 	worlds *worldsPage
+	packs  *modpacksPage
 	set    *settingsPage
 }
 
@@ -73,16 +75,21 @@ const (
 	pageMine = iota
 	pageGet
 	pageWorlds
+	pageModpacks
 	pageSettings
 )
 
-// Run opens the window and returns when it's closed.
-func Run(m *manager.Manager, version string) error {
-	if forwardToRunning() {
+// Run opens the window and returns when it's closed. openPack is a .wbm
+// file to show (wbmm started by opening one), or "".
+func Run(m *manager.Manager, version, openPack string) error {
+	if forwardToRunning(openPack) {
 		return nil
 	}
 	selfupdate.Current = version
 	selfupdate.Cleanup()
+	if d, err := manager.ConfigDir(); err == nil {
+		popularity.CacheDir = d
+	}
 	a := app.NewWithID(appID)
 	a.Settings().SetTheme(wbTheme{})
 	a.SetIcon(fyne.NewStaticResource("wbmm.png", desktop.IconPNG()))
@@ -90,10 +97,16 @@ func Run(m *manager.Manager, version string) error {
 	u.w = a.NewWindow("WorldBox Mod Manager")
 	u.w.Resize(fyne.NewSize(1240, 800))
 	u.build()
-	stop := listenForOthers(func() {
+	if openPack != "" {
+		u.packs.openPath(openPack)
+	}
+	stop := listenForOthers(func(pack string) {
 		fyne.Do(func() {
 			u.w.Show()
 			u.w.RequestFocus()
+			if pack != "" {
+				u.packs.openPath(pack)
+			}
 		})
 	})
 	defer stop()
@@ -106,8 +119,9 @@ func (u *ui) build() {
 	u.mine = newMyModsPage(u)
 	u.get = newGetModsPage(u)
 	u.worlds = newWorldsPage(u)
+	u.packs = newModpacksPage(u)
 	u.set = newSettingsPage(u)
-	u.pages = []fyne.CanvasObject{u.mine.root, u.get.root, u.worlds.root, u.set.root}
+	u.pages = []fyne.CanvasObject{u.mine.root, u.get.root, u.worlds.root, u.packs.root, u.set.root}
 
 	u.notices = container.NewVBox()
 	u.actText = widget.NewLabel("")
@@ -146,6 +160,7 @@ func (u *ui) sidebar() fyne.CanvasObject {
 		{theme.ListIcon(), "My mods"},
 		{theme.DownloadIcon(), "Get mods"},
 		{theme.HomeIcon(), "Worlds"},
+		{theme.StorageIcon(), "Modpacks"},
 		{theme.SettingsIcon(), "Settings"},
 	}
 	navBox := container.NewVBox()
@@ -204,6 +219,8 @@ func (u *ui) show(i int) {
 		u.mine.reload()
 	case pageWorlds:
 		u.worlds.reload()
+	case pageModpacks:
+		u.packs.reload()
 	case pageSettings:
 		u.set.refresh()
 	}
@@ -434,6 +451,7 @@ func (u *ui) restart() {
 // itself and GameBanana mods, at start and every six hours.
 func (u *ui) background() {
 	go pruneImageCache()
+	go desktop.Refresh()
 	u.refreshStatus(true)
 	fyne.Do(func() { u.mine.reload() })
 	time.Sleep(3 * time.Second)
@@ -462,9 +480,17 @@ func (u *ui) background() {
 			lastApp = time.Now()
 			u.selfUpdate(false)
 		}
-		if !cfg.NoModUpdates && time.Since(lastMods) > 6*time.Hour && !game.Running() {
+		if time.Since(lastMods) > 6*time.Hour && !game.Running() {
 			lastMods = time.Now()
-			u.autoUpdateMods()
+			if name, err := u.m.AutoUpdateLoader(); err != nil {
+				log.Printf("NeoModLoader update: %v", err)
+			} else if name != "" {
+				fyne.Do(func() { u.say("Updated NeoModLoader to %s. Settings can take you back if mods misbehave.", name) })
+				u.refreshStatus(true)
+			}
+			if !cfg.NoModUpdates {
+				u.autoUpdateMods()
+			}
 		}
 		<-tick.C
 		u.refreshStatus(false)

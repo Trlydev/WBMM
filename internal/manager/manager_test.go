@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Trlydev/WBMM/internal/game"
+	"github.com/Trlydev/WBMM/internal/modpack"
 	"github.com/Trlydev/WBMM/internal/nml"
 	"github.com/Trlydev/WBMM/internal/sources"
 )
@@ -303,7 +304,7 @@ func TestStateSharedAndDamaged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m1.SetUpdates(false, true); err != nil {
+	if err := m1.SetUpdates(false, true, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := m2.SetGameDir(""); err != nil {
@@ -354,5 +355,50 @@ func TestOtherPlacesNMLLoads(t *testing.T) {
 	}
 	if _, err := os.Stat(zp + ".wbmm-held"); err != nil || len(held) == 0 {
 		t.Errorf("risky zip not held: %v, %v", held, err)
+	}
+}
+
+// A pack of the current mods plans nothing; switching one off and applying
+// the pack switches it back on; an exclusive pack switches off the rest.
+func TestModpacks(t *testing.T) {
+	m, gd := fakeGame(t)
+	gameRunning = func() bool { return false }
+	defer func() { gameRunning = game.Running }()
+	p, err := m.ExportPack("Mine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Entries) != 3 { // ModernBox, Wrapped (by hand), Optime (Workshop)
+		t.Fatalf("entries: %+v", p.Entries)
+	}
+	steps, _ := m.PlanPack(p, false)
+	for _, s := range steps {
+		if s.What != "ok" {
+			t.Errorf("a pack of what's installed wants %s for %s", s.What, s.Entry.Name)
+		}
+	}
+	m.SetEnabled("APEXLITE_OPTIME", false)
+	steps, _ = m.PlanPack(p, false)
+	if errs := m.ApplyPack(steps, func(string) {}); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if off, _ := nml.Disabled(game.NMLDir(gd)); off["APEXLITE_OPTIME"] {
+		t.Error("applying the pack didn't switch Optime back on")
+	}
+
+	small := modpack.Pack{Name: "Only Optime", Entries: []modpack.Entry{{Source: modpack.Workshop, ID: 3387086485, Enabled: true, Name: "Optime"}}}
+	steps, _ = m.PlanPack(small, true)
+	m.ApplyPack(steps, func(string) {})
+	off, _ := nml.Disabled(game.NMLDir(gd))
+	if !off["TUXXEGO_MODERNBOX"] || off["APEXLITE_OPTIME"] {
+		t.Errorf("exclusive pack: off = %v", off)
+	}
+
+	path, err := SavePack(small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := SavedPacks(); len(saved) != 1 || saved[0].Path != path || saved[0].Pack.Name != "Only Optime" {
+		t.Errorf("saved: %+v", saved)
 	}
 }

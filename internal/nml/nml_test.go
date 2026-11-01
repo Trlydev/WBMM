@@ -1,9 +1,11 @@
 package nml
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -158,5 +160,39 @@ func TestFindDeclareBreadthFirst(t *testing.T) {
 func TestSymbolOutsideBMP(t *testing.T) {
 	if got := Symbol("evil𐐨"); got != "EVIL𐐨" {
 		t.Errorf("Symbol = %q", got)
+	}
+}
+
+func TestParseLog(t *testing.T) {
+	log := `Initialize engine version
+[NML]: NeoModLoader Version: f6017bd
+[NML]: Failed to compile mod OLD_STUFF:
+Code/Main.cs(12,5): error CS0246: The type or namespace name 'ActorAsset' could not be found
+Code/Main.cs(20,9): error CS0246: The type or namespace name 'Kingdom' could not be found
+[NML]: Compile skipped for mod NEEDS_OLD because required dependencies failed to compile:
+    OLD_STUFF
+[NML]: Mod LONELY has missing dependencies:
+    someone.lib
+Grab the missing dependency mod and try again.
+[NML]: [Optime]: OnLoad
+[NML]: [Optime]: Loaded
+[NML]: Crashy has been disabled due to an error. Please check the log for details.
+`
+	gl := ParseLog(bufio.NewScanner(strings.NewReader(log)))
+	if !gl.NML || !gl.Loaded["Optime"] {
+		t.Errorf("loaded: %+v", gl)
+	}
+	p := gl.ProblemsFor("OLD_STUFF", "Old Stuff")
+	if len(p) != 1 || p[0].Kind != "compile" || len(p[0].Details) != 2 || !strings.Contains(p[0].Summary, "isn't there") {
+		t.Errorf("compile: %+v", p)
+	}
+	if p := gl.ProblemsFor("NEEDS_OLD", ""); len(p) != 1 || p[0].Kind != "dependency" {
+		t.Errorf("skipped: %+v", p)
+	}
+	if p := gl.ProblemsFor("LONELY", ""); len(p) != 1 || len(p[0].Details) != 1 || p[0].Details[0] != "someone.lib" {
+		t.Errorf("missing: %+v", p)
+	}
+	if p := gl.ProblemsFor("CRASHY_ID", "crashy"); len(p) != 1 || p[0].Kind != "disabled" {
+		t.Errorf("disabled: %+v", p)
 	}
 }

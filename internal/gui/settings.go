@@ -24,6 +24,8 @@ type settingsPage struct {
 	gameDir  *widget.Entry
 	modsAuto *widget.Check
 	appAuto  *widget.Check
+	nmlAuto  *widget.Check
+	restore  *widget.Button
 	appText  *widget.Label
 	appBtn   *widget.Button
 }
@@ -39,9 +41,24 @@ func newSettingsPage(u *ui) *settingsPage {
 			u.openURL(u.loader.ReleaseURL)
 		}
 	})
+	s.restore = widget.NewButtonWithIcon("Go back to the previous version", theme.HistoryIcon(), func() {
+		dialog.ShowConfirm("Go back to the previous NeoModLoader?",
+			"Use this if mods stopped working after NeoModLoader updated. wbmm won't update it to that version again; the next newer one installs as usual.",
+			func(ok bool) {
+				if !ok {
+					return
+				}
+				if err := u.m.RestoreLoader(); err != nil {
+					u.fail(err)
+					return
+				}
+				u.say("Back on the previous NeoModLoader.")
+				go u.refreshStatus(true)
+			}, u.w)
+	})
 	nml := section("NeoModLoader",
 		"The loader WorldBox mods need. It lives in the game's StreamingAssets/mods folder.",
-		s.nmlText, container.NewHBox(s.nmlBtn, s.notes))
+		s.nmlText, container.NewHBox(s.nmlBtn, s.notes, s.restore))
 
 	s.gameText = label("")
 	s.gameDir = widget.NewEntry()
@@ -63,13 +80,15 @@ func newSettingsPage(u *ui) *settingsPage {
 	s.modsAuto.SetChecked(!cfg.NoModUpdates)
 	s.appAuto = widget.NewCheck("Update WorldBox Mod Manager automatically", func(bool) { s.saveUpdates() })
 	s.appAuto.SetChecked(!cfg.NoAppUpdates)
+	s.nmlAuto = widget.NewCheck("Update NeoModLoader automatically", func(bool) { s.saveUpdates() })
+	s.nmlAuto.SetChecked(!cfg.NoNMLUpdates)
 	checkNow := widget.NewButtonWithIcon("Check now", theme.ViewRefreshIcon(), func() {
 		go u.selfUpdate(true)
 		u.mine.checkUpdates(true)
 	})
 	updates := section("Updates",
-		"Checked when wbmm starts and every six hours. Mod updates only follow the file you installed (a mod's other versions or ports are never swapped in) and only install when GameBanana's virus scan passed them. Steam keeps Workshop mods updated itself.",
-		s.modsAuto, s.appAuto, container.NewHBox(checkNow))
+		"Checked when wbmm starts and every six hours, with WorldBox closed. NeoModLoader updates keep the previous version so you can go back. Mod updates only follow the file you installed (a mod's other versions or ports are never swapped in) and only install when GameBanana's virus scan passed them. Steam keeps Workshop mods updated itself.",
+		s.modsAuto, s.nmlAuto, s.appAuto, container.NewHBox(checkNow))
 
 	s.appText = label("")
 	s.appBtn = widget.NewButton("", nil)
@@ -112,10 +131,10 @@ func (s *settingsPage) saveGameDir() {
 }
 
 func (s *settingsPage) saveUpdates() {
-	if s.modsAuto == nil || s.appAuto == nil {
+	if s.modsAuto == nil || s.appAuto == nil || s.nmlAuto == nil {
 		return
 	}
-	if err := s.u.m.SetUpdates(s.modsAuto.Checked, s.appAuto.Checked); err != nil {
+	if err := s.u.m.SetUpdates(s.modsAuto.Checked, s.appAuto.Checked, s.nmlAuto.Checked); err != nil {
 		s.u.fail(err)
 	}
 }
@@ -154,6 +173,11 @@ func (s *settingsPage) refresh() {
 	}
 	if u.loader != nil && u.loader.ReleaseURL != "" {
 		s.notes.Show()
+	}
+	if u.m.LoaderBackup() {
+		s.restore.Show()
+	} else {
+		s.restore.Hide()
 	}
 
 	if desktop.IsInstalled() {

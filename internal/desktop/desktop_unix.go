@@ -38,8 +38,9 @@ Type=Application
 Name=%s
 GenericName=WorldBox mod manager
 Comment=Install and update WorldBox mods from GameBanana and the Steam Workshop
-Exec=%s gui
+Exec=%s %%f
 Icon=wbmm
+MimeType=application/x-wbmm-modpack;
 Terminal=false
 Categories=Game;Utility;
 Keywords=WorldBox;mods;workshop;GameBanana;NeoModLoader;
@@ -61,6 +62,21 @@ func execQuote(p string) string {
 	q := `"` + b.String() + `"`
 	return strings.ReplaceAll(strings.ReplaceAll(q, `\`, `\\`), "%", "%%")
 }
+
+// modpackMime registers .wbm files (wbmm modpacks).
+const modpackMime = "application/x-wbmm-modpack"
+
+const mimeXML = `<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-wbmm-modpack">
+    <comment>WorldBox Mod Manager modpack</comment>
+    <icon name="wbmm"/>
+    <glob pattern="*.wbm"/>
+  </mime-type>
+</mime-info>
+`
+
+func mimePath() string { return filepath.Join(dataHome(), "mime", "packages", "wbmm.xml") }
 
 func paths() (menu, desk, png, svg string) {
 	d := dataHome()
@@ -99,21 +115,50 @@ func Install(o Options, logf func(string, ...any)) (string, error) {
 			}
 		}
 	}
+	registerModpacks(logf)
 	exec.Command("update-desktop-database", filepath.Dir(menu)).Run()
 	exec.Command("gtk-update-icon-cache", "-q", filepath.Join(dataHome(), "icons", "hicolor")).Run()
 	return exe, nil
+}
+
+// registerModpacks makes .wbm files open in wbmm.
+func registerModpacks(logf func(string, ...any)) {
+	if err := os.MkdirAll(filepath.Dir(mimePath()), 0o755); err == nil && os.WriteFile(mimePath(), []byte(mimeXML), 0o644) == nil {
+		exec.Command("update-mime-database", filepath.Join(dataHome(), "mime")).Run()
+		exec.Command("xdg-mime", "default", "wbmm.desktop", modpackMime).Run()
+		logf("registered .wbm modpack files")
+	}
+}
+
+// Refresh brings an installed copy's menu entry and file types up to date
+// (an update may have added some): run at start by the installed copy.
+func Refresh() {
+	if !IsInstalled() {
+		return
+	}
+	menu, _, _, _ := paths()
+	want := entry(InstallPath())
+	if b, err := os.ReadFile(menu); err == nil && string(b) == want {
+		if _, err := os.Stat(mimePath()); err == nil {
+			return
+		}
+	}
+	os.WriteFile(menu, []byte(want), 0o755)
+	registerModpacks(func(string, ...any) {})
+	exec.Command("update-desktop-database", filepath.Dir(menu)).Run()
 }
 
 // Uninstall removes the program, menu entry, icons and desktop shortcut.
 // Mods and wbmm's data folder are left alone.
 func Uninstall(logf func(string, ...any)) error {
 	menu, desk, png, svg := paths()
-	for _, p := range []string{menu, desk, png, svg, InstallPath(), InstallPath() + ".old"} {
+	for _, p := range []string{menu, desk, png, svg, mimePath(), InstallPath(), InstallPath() + ".old"} {
 		if err := os.Remove(p); err == nil {
 			logf("removed %s", p)
 		}
 	}
 	exec.Command("update-desktop-database", filepath.Dir(menu)).Run()
+	exec.Command("update-mime-database", filepath.Join(dataHome(), "mime")).Run()
 	return nil
 }
 

@@ -16,6 +16,11 @@ type Config struct {
 	NoModUpdates bool `json:"noModUpdates,omitempty"`
 	// NoAppUpdates stops wbmm updating itself.
 	NoAppUpdates bool `json:"noAppUpdates,omitempty"`
+	// NoNMLUpdates stops updating NeoModLoader automatically.
+	NoNMLUpdates bool `json:"noNmlUpdates,omitempty"`
+	// SkipNML is the NeoModLoader release (its DLL's SHA-256) the person
+	// went back from: automatic updates leave it alone.
+	SkipNML string `json:"skipNml,omitempty"`
 }
 
 // Record is a mod wbmm installed from GameBanana, so it can be updated.

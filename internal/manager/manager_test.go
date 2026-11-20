@@ -402,3 +402,27 @@ func TestModpacks(t *testing.T) {
 		t.Errorf("saved: %+v", saved)
 	}
 }
+
+// A mod held under older scanner rules that the current rules pass goes
+// back on; one they still flag stays held.
+func TestRulesChangeReleases(t *testing.T) {
+	m, gd := fakeGame(t)
+	gameRunning = func() bool { return false }
+	defer func() { gameRunning = game.Running }()
+	md, err := m.Find("TUXXEGO_MODERNBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := Verdict{Fingerprint: fingerprint(md.Folder), Max: 3, Held: true, Rules: 1}
+	m.update(func(st *state) { st.Verdicts[md.Folder] = old })
+	nml.SetDisabled(game.NMLDir(gd), md.UID, true)
+	if _, err := m.CheckAll(); err != nil {
+		t.Fatal(err)
+	}
+	if off, _ := nml.Disabled(game.NMLDir(gd)); off[md.UID] {
+		t.Error("still off after the new rules passed it")
+	}
+	if v, _ := m.Verdict(md.Folder); v.Held || v.Blocked() || v.Rules != ScanRules {
+		t.Errorf("verdict %+v", v)
+	}
+}

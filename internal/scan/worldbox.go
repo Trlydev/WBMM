@@ -651,9 +651,13 @@ func combine(r *Report, m roleMap) {
 			c.network = true
 		case "code-loader", "process-spawn", "processstartinfo", "hidden-executable", "dropper":
 			c.runs = true
-		case "file-write", "file-delete", "mass-delete", "writes-scripts", "self-replication", "game-path-tamper":
+		case "file-write", "file-delete", "mass-delete", "writes-scripts", "self-replication":
 			c.writes = true
 		case "names-loader-files":
+			// Not game-path-tamper: it is also a bare mention of the game's
+			// code folder (a profiler skipping the game's own assemblies). A
+			// real write there comes with file-write or file-delete, and
+			// naming loader files with names-loader-files.
 			c.loader = true
 		case "env-paths":
 			c.userFiles = true

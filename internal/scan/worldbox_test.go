@@ -230,3 +230,24 @@ func TestNMLWorkshopAPI(t *testing.T) {
 		t.Errorf("NML upload not CRITICAL: %+v", r.Findings)
 	}
 }
+
+// A profiler that skips the game's own assemblies names their folder; that
+// is not writing into it (WorldBox Optimizer was held for this in 0.3.5).
+func TestNamingGameFolderIsNotTampering(t *testing.T) {
+	root := writeMod(t, map[string]string{"mod.json": modJSON,
+		"Code/Timers.cs": `using System.Reflection; class T {
+	static string dll = "NeoModLoader.dll";
+	static bool IsGame(Assembly a) { return a.Location.Replace('\\', '/').Contains("_Data/Managed/"); } }`})
+	r, _ := Mod(root, Options{})
+	if hasSev(r, "tampers-with-mods", Critical) {
+		t.Errorf("naming the game's folders counted as tampering: %+v", r.Findings)
+	}
+	// Writing there in the same code still is.
+	root = writeMod(t, map[string]string{"mod.json": modJSON,
+		"Code/Bad.cs": `using System.IO; class B { void X(string g, byte[] b) {
+	File.WriteAllBytes(Path.Combine(g, "worldbox_Data/Managed/NeoModLoader.dll"), b); } }`})
+	r, _ = Mod(root, Options{})
+	if !hasSev(r, "tampers-with-mods", Critical) {
+		t.Errorf("writing NeoModLoader.dll into the game's folder not caught: %+v", r.Findings)
+	}
+}

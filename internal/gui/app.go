@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -511,7 +512,18 @@ func (u *ui) background() {
 
 // selfUpdate installs a newer wbmm release, if any. force reports "up to
 // date" too (the Setup button).
+// updating is set while selfUpdate runs: the background check and the
+// Settings button never download at the same time.
+var updating atomic.Bool
+
 func (u *ui) selfUpdate(force bool) {
+	if !updating.CompareAndSwap(false, true) {
+		if force {
+			fyne.Do(func() { u.say("Already checking for wbmm updates…") })
+		}
+		return
+	}
+	defer updating.Store(false)
 	if !strings.HasPrefix(u.version, "v") {
 		if force {
 			fyne.Do(func() { u.say("This is a development build; it doesn't update itself.") })
@@ -522,6 +534,14 @@ func (u *ui) selfUpdate(force bool) {
 	if err != nil {
 		if force {
 			fyne.Do(func() { u.fail(fmt.Errorf("checking for wbmm updates: %w", err)) })
+		}
+		return
+	}
+	pending := ""
+	fyne.DoAndWait(func() { pending = u.restartTo })
+	if rel.Version == pending {
+		if force {
+			fyne.Do(func() { u.say("wbmm %s is installed. Restart to use it.", pending) })
 		}
 		return
 	}

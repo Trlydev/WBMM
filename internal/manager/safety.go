@@ -36,7 +36,14 @@ type Verdict struct {
 	Accepted bool `json:"accepted,omitempty"`
 	// Held: wbmm switched the mod off because of this verdict.
 	Held bool `json:"held,omitempty"`
+	// Rules is the scanner's rules version (ScanRules) it was made with.
+	Rules int `json:"rules,omitempty"`
 }
+
+// ScanRules changes when the scanner's verdicts change: stored verdicts
+// from older rules are made again.
+// 2: naming the game's code folder no longer counts as writing to it.
+const ScanRules = 2
 
 // Blocked reports whether the verdict keeps the mod from running.
 func (v *Verdict) Blocked() bool { return v != nil && v.Max >= scan.Critical && !v.Accepted }
@@ -94,7 +101,7 @@ func fingerprint(dir string) string {
 
 // keep trims a report to what's worth storing and showing.
 func keep(r *scan.Report) Verdict {
-	v := Verdict{Scanned: time.Now(), Max: r.Max()}
+	v := Verdict{Scanned: time.Now(), Max: r.Max(), Rules: ScanRules}
 	for _, f := range r.Findings {
 		if f.Severity >= scan.Medium {
 			v.Findings = append(v.Findings, f)
@@ -132,6 +139,32 @@ func (m *Manager) check(md Mod) (Verdict, bool, error) {
 	m.mu.Lock()
 	v, had := m.st.Verdicts[md.Folder]
 	m.mu.Unlock()
+	if had && v.Fingerprint == fp && v.Rules != ScanRules && !v.Accepted {
+		// Made by older rules: check again. A mod wbmm held that the new
+		// rules pass goes back on.
+		rep, err := scan.Mod(md.Folder, m.ScanOptions())
+		if err != nil {
+			return Verdict{}, false, err
+		}
+		nv := keep(rep)
+		nv.Fingerprint, nv.Rules = fp, ScanRules
+		if v.Held && !nv.Blocked() {
+			if gameRunning() {
+				return v, false, nil // the game rewrites NML's list: later
+			}
+			if gd, err := m.GameDir(); err == nil && md.UID != "" {
+				if err := nml.SetDisabled(game.NMLDir(gd), md.UID, false); err != nil {
+					return v, false, err
+				}
+			}
+		} else if v.Held {
+			nv.Held = true
+		}
+		v = nv
+		if err := m.update(func(st *state) { st.Verdicts[md.Folder] = v }); err != nil {
+			return v, false, err
+		}
+	}
 	if had && v.Fingerprint == fp && v.Held && v.Blocked() && md.Enabled && md.UID != "" && !gameRunning() {
 		// Held, but on again: NML switches on what an enabled mod needs,
 		// and the in-game Mods window can too. Off again.
@@ -149,7 +182,7 @@ func (m *Manager) check(md Mod) (Verdict, bool, error) {
 			return Verdict{}, false, err
 		}
 		v = keep(rep)
-		v.Fingerprint = fp
+		v.Fingerprint, v.Rules = fp, ScanRules
 	}
 	// Switch it off now, or (the game rewrites NML's list while it runs)
 	// at the next check after the game closes.

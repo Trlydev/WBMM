@@ -61,6 +61,7 @@ type browserSource struct {
 // the Get mods and Worlds pages.
 type browser struct {
 	u       *ui
+	kind    string // "get" or "worlds"
 	root    fyne.CanvasObject
 	sources []browserSource
 	src     int
@@ -72,6 +73,7 @@ type browser struct {
 	sortBox   fyne.CanvasObject
 	periodBox fyne.CanvasObject
 	note      *widget.Label
+	trend     *fyne.Container // this week's biggest gainers (Get mods)
 	list      *fyne.Container
 	status    *widget.Label
 	more      *widget.Button
@@ -85,8 +87,8 @@ type browser struct {
 	loading  bool
 }
 
-func newBrowser(u *ui, title string, srcs []browserSource) *browser {
-	b := &browser{u: u, sources: srcs}
+func newBrowser(u *ui, kind, title string, srcs []browserSource) *browser {
+	b := &browser{u: u, kind: kind, sources: srcs}
 	seg := container.NewHBox()
 	for i, s := range srcs {
 		i := i
@@ -115,6 +117,7 @@ func newBrowser(u *ui, title string, srcs []browserSource) *browser {
 	})
 	b.periodSel = widget.NewSelect(labels(periods), reload)
 	b.note = mutedLabel("")
+	b.trend = container.NewVBox()
 	b.list = container.NewVBox()
 	b.status = label("")
 	b.status.Alignment = fyne.TextAlignCenter
@@ -129,7 +132,7 @@ func newBrowser(u *ui, title string, srcs []browserSource) *browser {
 	b.sortBox = fixedSize(b.sortSel, 170, 36)
 	b.periodBox = fixedSize(b.periodSel, 130, 36)
 	searchRow := container.NewBorder(nil, nil, nil, container.NewHBox(b.sortBox, b.periodBox), b.search)
-	left := container.NewBorder(container.NewVBox(searchRow, b.note), nil, nil, nil, b.scroll)
+	left := container.NewBorder(container.NewVBox(searchRow, b.note, b.trend), nil, nil, nil, b.scroll)
 	split := container.NewHSplit(left, b.details.root)
 	split.Offset = 0.56
 	b.root = container.NewBorder(pageHeader(title, seg), nil, nil, nil, split)
@@ -199,6 +202,9 @@ func (b *browser) load(reset bool) {
 	}
 	b.seq++
 	seq, s, q, sort, page := b.seq, b.sources[b.src], strings.TrimSpace(b.search.Text), b.sortKey(), b.page
+	if reset {
+		b.loadTrending(seq, s, q)
+	}
 	b.status.SetText("Loading…")
 	b.status.Show()
 	b.more.Hide()
@@ -526,12 +532,69 @@ func wsCard(it sources.WSItem) modCard {
 	}
 }
 
+// ---------- trending ----------
+
+// trendKinds: the browser tabs with a trending strip, and what they list.
+var trendKinds = map[string][2]string{"get:gamebanana": {"gb", "mod"}, "get:workshop": {"ws", "mod"}}
+
+// loadTrending shows this week's biggest gainers above the list, when not
+// searching and the tracker has a few days of history.
+func (b *browser) loadTrending(seq int, s browserSource, q string) {
+	src, ok := trendKinds[b.kind+":"+s.key]
+	b.trend.Objects = nil
+	b.trend.Refresh()
+	if !ok || q != "" {
+		return
+	}
+	go func() {
+		ix, err := popularity.Fetch()
+		if err != nil || ix.Days() < 3 {
+			return
+		}
+		cards, _, _ := fetchRanked(src[0], src[1], "", "rank:"+popularity.Week, 1)
+		if len(cards) > 8 {
+			cards = cards[:8]
+		}
+		fyne.Do(func() {
+			if seq != b.seq || len(cards) == 0 {
+				return
+			}
+			row := container.NewHBox()
+			for _, c := range cards {
+				row.Add(b.trendTile(c))
+			}
+			b.trend.Objects = []fyne.CanvasObject{
+				container.New(layout.NewCustomPaddedLayout(4, 0, 2, 0), text("TRENDING THIS WEEK", pal().muted, sSmall, true)),
+				container.NewHScroll(row),
+			}
+			b.trend.Refresh()
+		})
+	}()
+}
+
+func (b *browser) trendTile(c modCard) fyne.CanvasObject {
+	p := pal()
+	img := newRemoteImage(c.Thumb, 240, canvas.ImageFillCover)
+	img.CornerRadius = 6
+	bg := canvas.NewRectangle(p.surface2)
+	bg.CornerRadius = 6
+	gain := c.Stat
+	if i := strings.Index(gain, " · "); i > 0 {
+		gain = gain[:i]
+	}
+	gain = strings.NewReplacer(" downloads", "", " subscribers", "").Replace(gain) // "+1.4k this week"
+	tile := container.NewBorder(nil,
+		tight(line(c.Name, true, sSmall, widget.MediumImportance), line(gain, false, sSmall, widget.LowImportance)), nil, nil,
+		container.NewStack(bg, img))
+	return newTappable(fixedSize(tile, 132, 112), func() { b.open(c) }, nil)
+}
+
 // ---------- the two browser pages ----------
 
 type getModsPage struct{ *browser }
 
 func newGetModsPage(u *ui) *getModsPage {
-	return &getModsPage{newBrowser(u, "Get mods", []browserSource{
+	return &getModsPage{newBrowser(u, "get", "Get mods", []browserSource{
 		{key: "gamebanana", label: "GameBanana", sorted: true, fetch: fetchGameBanana(false),
 			note: "Installs into your Mods folder after a safety check. Worlds are on the Worlds page."},
 		{key: "workshop", label: "Steam Workshop", sorted: true, fetch: fetchWorkshop(sources.TagMod),
@@ -554,7 +617,7 @@ func (g *getModsPage) open(c modCard) {
 type worldsPage struct{ *browser }
 
 func newWorldsPage(u *ui) *worldsPage {
-	return &worldsPage{newBrowser(u, "Worlds", []browserSource{
+	return &worldsPage{newBrowser(u, "worlds", "Worlds", []browserSource{
 		{key: "installed", label: "Installed", fetch: fetchInstalledWorlds,
 			note: "Workshop worlds you're subscribed to and maps wbmm put into your saves. WorldBox lists them under Saves; they hold no code."},
 		{key: "workshop", label: "Steam Workshop", sorted: true, fetch: fetchWorkshop(sources.TagWorld),

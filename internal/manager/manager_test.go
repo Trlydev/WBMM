@@ -426,3 +426,40 @@ func TestRulesChangeReleases(t *testing.T) {
 		t.Errorf("verdict %+v", v)
 	}
 }
+
+func TestPutAsideBringBack(t *testing.T) {
+	m, gd := fakeGame(t)
+	gameRunning = func() bool { return false }
+	defer func() { gameRunning = game.Running }()
+	mods, _ := m.List()
+	var on []Mod
+	for _, md := range mods {
+		if md.Enabled && md.Problem == "" {
+			on = append(on, md)
+		}
+	}
+	if err := m.PutAside(on); err != nil {
+		t.Fatal(err)
+	}
+	off, _ := nml.Disabled(game.NMLDir(gd))
+	for _, md := range on {
+		if !off[md.UID] {
+			t.Errorf("%s still on", md.Name)
+		}
+	}
+	if sa := m.SetAside(); sa == nil || len(sa.UIDs) != len(on) {
+		t.Fatalf("set aside %+v", sa)
+	}
+	if failed, err := m.BringBack(); err != nil || len(failed) != 0 {
+		t.Fatalf("bring back: %v %v", failed, err)
+	}
+	off, _ = nml.Disabled(game.NMLDir(gd))
+	for _, md := range on {
+		if off[md.UID] {
+			t.Errorf("%s not back on", md.Name)
+		}
+	}
+	if m.SetAside() != nil {
+		t.Error("set not forgotten")
+	}
+}

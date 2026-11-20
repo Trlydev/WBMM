@@ -98,6 +98,15 @@ func TestScreenshots(t *testing.T) {
 		u.show(pageModpacks)
 	})
 	shot("5-modpacks", 4*time.Second)
+	fyne.DoAndWait(func() {
+		if pk, err := u.m.ExportPack("Modern war"); err == nil {
+			if path, err := manager.SavePack(pk); err == nil {
+				u.packs.opened, u.packs.selected, u.packs.editing = nil, path, true
+				u.packs.reload()
+			}
+		}
+	})
+	shot("5b-modpack-edit", 3*time.Second)
 	fyne.DoAndWait(func() { u.show(pageSettings) })
 	shot("6-settings", 2*time.Second)
 }

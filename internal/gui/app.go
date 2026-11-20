@@ -405,6 +405,9 @@ func (u *ui) play() {
 				return
 			}
 			start()
+			if pairs := u.mine.overlapPairs(); len(pairs) > 0 {
+				u.say("Starting WorldBox. %d pair(s) of mods change the same game code; if something breaks, My mods says which.", len(pairs))
+			}
 		})
 	}()
 }

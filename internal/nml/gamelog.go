@@ -30,6 +30,10 @@ type GameLog struct {
 	NML      bool            // NeoModLoader ran
 	Loaded   map[string]bool // mod names that finished loading
 	Problems []LogProblem
+	// Crashed: the game crashed during this run. LastMod is the last mod
+	// NeoModLoader named before the crash (a hint, not proof).
+	Crashed bool
+	LastMod string
 }
 
 var (
@@ -44,6 +48,10 @@ var (
 	reCSError     = regexp.MustCompile(`error (CS\d{4}):`)
 	reNMLStarted  = regexp.MustCompile(`^\[NML\]: NeoModLoader Version`)
 	reIndentEntry = regexp.MustCompile(`^\s{2,}(\S.*)$`)
+	reNMLMod      = regexp.MustCompile(`^\[NML\]: \[([^\]]+)\]`)
+	// What Unity writes when the game crashes: on Windows, and the native
+	// signal handlers on Linux and macOS.
+	reCrash = regexp.MustCompile(`^(Crash!!!|Caught fatal signal|Received signal SIG(SEGV|ABRT|BUS|ILL|FPE)|Native Crash Reporting|Obtained \d+ stack frames)`)
 )
 
 // PlayerLogs lists where Unity keeps WorldBox's log on this PC; gameDir
@@ -110,7 +118,14 @@ func ParseLog(sc *bufio.Scanner) *GameLog {
 			}
 			open = nil
 		}
+		if !gl.Crashed {
+			if m := reNMLMod.FindStringSubmatch(ln); m != nil {
+				gl.LastMod = m[1]
+			}
+		}
 		switch {
+		case reCrash.MatchString(ln):
+			gl.Crashed = true
 		case reNMLStarted.MatchString(ln):
 			gl.NML = true
 		case reLoaded.MatchString(ln):

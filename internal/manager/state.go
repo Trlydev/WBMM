@@ -46,6 +46,11 @@ type state struct {
 	Verdicts map[string]Verdict `json:"verdicts,omitempty"`
 	// Maps put into save slots, by slot folder.
 	Maps map[string]MapRecord `json:"maps,omitempty"`
+	// SetAside: mods switched off for troubleshooting.
+	SetAside *SetAside `json:"setAside,omitempty"`
+	// SeenRun is the time of the last game run whose crash or failures
+	// the person has dealt with (the banner stays away for it).
+	SeenRun time.Time `json:"seenRun,omitempty"`
 }
 
 // ConfigDir is wbmm's own folder (settings, state, log).

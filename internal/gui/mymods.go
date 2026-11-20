@@ -31,6 +31,8 @@ type myModsPage struct {
 	updates map[string]manager.Update
 	err     error
 	lastRun *nml.GameLog // what NeoModLoader said at the last game start
+	// overlaps: per switched-on mod (UID), others changing the same code.
+	overlaps map[string][]manager.ModOverlap
 
 	selected string // mod folder
 }
@@ -64,8 +66,9 @@ func (v *myModsPage) reload() {
 		mods, err := v.u.m.List()
 		sort.SliceStable(mods, func(i, j int) bool { return strings.ToLower(mods[i].Name) < strings.ToLower(mods[j].Name) })
 		lastRun, _ := v.u.m.LastRun()
+		overlaps := manager.Overlaps(mods)
 		fyne.Do(func() {
-			v.mods, v.err, v.lastRun = mods, err, lastRun
+			v.mods, v.err, v.lastRun, v.overlaps = mods, err, lastRun, overlaps
 			if len(mods) > 0 {
 				v.u.nav[pageMine].setCount(fmt.Sprint(len(mods)))
 			} else {
@@ -108,6 +111,9 @@ func (v *myModsPage) paint() {
 		v.list.Add(container.NewVBox(label("No mods yet."),
 			widget.NewButtonWithIcon("Get mods", theme.DownloadIcon(), func() { v.u.show(pageGet) })))
 	default:
+		if b := v.recoveryBanner(); b != nil {
+			v.list.Add(b)
+		}
 		f := strings.ToLower(strings.TrimSpace(v.filter.Text))
 		for _, md := range v.mods {
 			if f == "" || strings.Contains(strings.ToLower(md.Name+" "+md.Author), f) {
@@ -252,6 +258,9 @@ func (v *myModsPage) paintPanel() {
 	}
 	if len(md.Clashes) > 0 {
 		note("Doesn't work together with "+strings.Join(md.Clashes, ", ")+". Switch one of them off.", widget.WarningImportance)
+	}
+	if s := v.overlapNote(*md); s != "" {
+		note(s, widget.MediumImportance)
 	}
 	if run := v.runResult(*md); !run.loaded && u.outdated(md.FileAdded) {
 		note(u.outdatedNote(), widget.WarningImportance)

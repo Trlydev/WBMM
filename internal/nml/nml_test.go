@@ -196,3 +196,15 @@ Grab the missing dependency mod and try again.
 		t.Errorf("disabled: %+v", p)
 	}
 }
+
+func TestParseLogCrash(t *testing.T) {
+	log := "[NML]: NeoModLoader Version 1.0\n[NML]: [ModernBox]: Loaded\n[NML]: [WarBox] starting armies\nCaught fatal signal - signo:11 code:1 errno:0 addr:0x0\n[NML]: [Later] after\n"
+	gl := ParseLog(bufio.NewScanner(strings.NewReader(log)))
+	if !gl.Crashed || gl.LastMod != "WarBox" {
+		t.Fatalf("crashed %v, last mod %q", gl.Crashed, gl.LastMod)
+	}
+	gl = ParseLog(bufio.NewScanner(strings.NewReader("[NML]: [ModernBox]: Loaded\n")))
+	if gl.Crashed {
+		t.Fatal("a clean run counted as a crash")
+	}
+}

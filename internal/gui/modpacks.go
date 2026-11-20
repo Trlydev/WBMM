@@ -29,6 +29,7 @@ type modpacksPage struct {
 	saved    []manager.SavedPack
 	selected string        // path of the selected saved pack
 	opened   *modpack.Pack // a pack opened from a file or code, not saved yet
+	editing  bool          // the selected saved pack is being edited
 }
 
 func newModpacksPage(u *ui) *modpacksPage {
@@ -86,6 +87,7 @@ func (v *modpacksPage) row(pk modpack.Pack, path string, opened bool) fyne.Canva
 	selected := (opened && v.selected == "") || (!opened && path == v.selected)
 	return listRow(container.NewBorder(nil, nil, fixedSize(icon, 28, 28), nil, container.NewVBox(layout.NewSpacer(), text, layout.NewSpacer())),
 		selected, func() {
+			v.editing = false
 			if opened {
 				v.selected = ""
 			} else {
@@ -113,6 +115,10 @@ func (v *modpacksPage) paintPanel() {
 	if pk == nil {
 		v.panel.Objects = []fyne.CanvasObject{placeholder("Pick a modpack, or open one someone shared.")}
 		v.panel.Refresh()
+		return
+	}
+	if v.editing && path != "" {
+		v.paintEditor(pk, path)
 		return
 	}
 	u, p := v.u, pal()
@@ -172,6 +178,10 @@ func (v *modpacksPage) paintPanel() {
 		})
 		acts.Add(keep)
 	} else {
+		acts.Add(widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
+			v.editing = true
+			v.paintPanel()
+		}))
 		del := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
 			dialog.ShowConfirm("Delete "+pk.Name+"?", "Only the saved modpack is deleted; your mods stay.", func(ok bool) {
 				if ok {
@@ -353,4 +363,157 @@ func (v *modpacksPage) openPath(path string) {
 	v.u.show(pageModpacks)
 	v.paint()
 	v.u.say("Opened %s (%d mods). Check the list, then Apply.", pk.Name, len(pk.Entries))
+}
+
+// ---------- editing a saved pack ----------
+
+// entryKey identifies a pack entry: where it comes from, or its name for
+// mods installed by hand.
+func entryKey(e modpack.Entry) string {
+	if e.Source == modpack.Local {
+		return "local:" + strings.ToLower(e.Name)
+	}
+	return fmt.Sprintf("%d:%d", e.Source, e.ID)
+}
+
+func entrySource(e modpack.Entry) string {
+	return map[int]string{modpack.GameBanana: "GameBanana", modpack.Workshop: "Workshop", modpack.Local: "installed by hand"}[e.Source]
+}
+
+// paintEditor shows a saved pack's mods to rename it, switch mods on or
+// off in it, remove and add them. Each change is saved straight away.
+func (v *modpacksPage) paintEditor(pk *modpack.Pack, path string) {
+	u := v.u
+	save := func() bool {
+		if err := manager.WritePackFile(path, *pk); err != nil {
+			u.fail(err)
+			return false
+		}
+		return true
+	}
+	name := widget.NewEntry()
+	name.SetText(pk.Name)
+	rename := func() {
+		n := strings.TrimSpace(name.Text)
+		if n == "" || n == pk.Name {
+			return
+		}
+		old := pk.Name
+		pk.Name = n
+		np, err := manager.SavePack(*pk)
+		if err != nil {
+			pk.Name = old
+			u.fail(err)
+			return
+		}
+		if np != path {
+			os.Remove(path)
+		}
+		v.selected = np
+	}
+	name.OnSubmitted = func(string) { rename(); v.reload() }
+
+	list := container.NewVBox()
+	for i := range pk.Entries {
+		i := i
+		e := pk.Entries[i]
+		sw := newToggle(e.Enabled, func(on bool) {
+			pk.Entries[i].Enabled = on
+			save()
+		})
+		rm := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+			pk.Entries = append(pk.Entries[:i], pk.Entries[i+1:]...)
+			if save() {
+				v.paintPanel()
+			}
+		})
+		rm.Importance = widget.LowImportance
+		info := tight(line(e.Name, true, theme.SizeNameText, widget.MediumImportance), line(entrySource(e), false, sSmall, widget.LowImportance))
+		list.Add(container.NewBorder(nil, nil, nil, container.NewHBox(container.NewCenter(sw), rm), info))
+	}
+	if len(pk.Entries) == 0 {
+		list.Add(mutedLabel("No mods in it. Add some of yours."))
+	}
+
+	add := widget.NewButtonWithIcon("Add installed mods", theme.ContentAddIcon(), func() { v.addToPack(pk, save) })
+	add.Importance = widget.HighImportance
+	useMine := widget.NewButtonWithIcon("Use my current mods", theme.ViewRefreshIcon(), func() {
+		dialog.ShowConfirm("Replace "+pk.Name+"'s mods?", "It will list the mods installed now, on or off as they are now.", func(ok bool) {
+			if !ok {
+				return
+			}
+			cur, err := u.m.ExportPack(pk.Name)
+			if err != nil {
+				u.fail(err)
+				return
+			}
+			pk.Entries = cur.Entries
+			if save() {
+				v.paintPanel()
+			}
+		}, u.w)
+	})
+	done := widget.NewButtonWithIcon("Done", theme.ConfirmIcon(), func() {
+		rename()
+		v.editing = false
+		v.reload()
+	})
+
+	body := container.NewVBox(
+		widget.NewForm(widget.NewFormItem("Name", name)),
+		container.NewHBox(add, useMine, layout.NewSpacer(), done),
+		mutedLabel("The switch says whether a mod is on when the pack is applied. Changes are saved as you make them."),
+		section2(fmt.Sprintf("Mods (%d)", len(pk.Entries)), list),
+	)
+	v.panel.Objects = []fyne.CanvasObject{container.NewVScroll(container.New(layout.NewCustomPaddedLayout(0, 12, 12, 8), body))}
+	v.panel.Refresh()
+}
+
+// addToPack lets the person pick installed mods the pack doesn't list.
+func (v *modpacksPage) addToPack(pk *modpack.Pack, save func() bool) {
+	u := v.u
+	cur, err := u.m.ExportPack("")
+	if err != nil {
+		u.fail(err)
+		return
+	}
+	in := map[string]bool{}
+	for _, e := range pk.Entries {
+		in[entryKey(e)] = true
+	}
+	var candidates []modpack.Entry
+	for _, e := range cur.Entries {
+		if !in[entryKey(e)] {
+			candidates = append(candidates, e)
+		}
+	}
+	if len(candidates) == 0 {
+		u.say("Every installed mod is already in %s.", pk.Name)
+		return
+	}
+	picked := map[int]bool{}
+	box := container.NewVBox()
+	for i, e := range candidates {
+		i := i
+		box.Add(widget.NewCheck(e.Name+"  ·  "+entrySource(e), func(on bool) { picked[i] = on }))
+	}
+	sc := container.NewVScroll(box)
+	sc.SetMinSize(fyne.NewSize(420, 320))
+	dialog.ShowCustomConfirm("Add to "+pk.Name, "Add", "Cancel", sc, func(ok bool) {
+		if !ok {
+			return
+		}
+		n := 0
+		for i, e := range candidates {
+			if picked[i] {
+				e.Enabled = true
+				pk.Entries = append(pk.Entries, e)
+				n++
+			}
+		}
+		if n > 0 && save() {
+			u.say("Added %d mod(s) to %s.", n, pk.Name)
+			v.paintPanel()
+		}
+	}, u.w)
 }

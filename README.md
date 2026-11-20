@@ -48,9 +48,20 @@ selected item's details beside it.
   start**: wbmm reads NeoModLoader's lines in the game's log, so a mod that
   didn't compile or load says why, in plain words ("written for a different
   WorldBox version"), with the compiler's errors.
+  - **When the game crashed or mods failed**, a box at the top says so (and
+    which mod NeoModLoader mentioned last before a crash), with **Switch off
+    the ones that failed** and **Play without mods**. wbmm remembers what it
+    switched off; **Bring them back** switches exactly those on again.
+  - **Mods that change the same game code**: wbmm reads each mod's Harmony
+    patches and notes switched-on mods that both replace or can skip the
+    same game method (prefixes that can stop the original, transpilers).
+    They often work together; when something breaks, it's the first place to
+    look. Play mentions them too. Only patches declared with attributes are
+    seen; ones made in code at run time can't be read without running it.
 - **Get mods:** GameBanana or Steam Workshop mods (worlds and maps live on
   the Worlds page); search or paste a link. Sort by **Popularity** (today,
-  this week, this month or all time), **Recently updated**, **Newest** or
+  this week, this month or all time; with no search, the week's biggest
+  gainers show in a **Trending** strip on top), **Recently updated**, **Newest** or
   **Relevance** (best match for your search). Select one for its
   screenshots, description, stats and files. Mods last updated before the
   current WorldBox version came out are marked: they may not work.
@@ -71,7 +82,9 @@ selected item's details beside it.
   you've saved over it in the game.
 - **Modpacks:** save your mods as a modpack, share it, open someone else's.
   Saved packs work as profiles: apply one (optionally switching off what
-  isn't in it) to swap sets of mods in one click.
+  isn't in it) to swap sets of mods in one click. **Edit** a saved pack to
+  rename it, switch mods on or off in it, remove them, add installed mods,
+  or replace its list with your current mods.
 - **Settings:** NeoModLoader, the game folder, automatic updates, and the app
   install.
 
